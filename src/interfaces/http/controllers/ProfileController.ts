@@ -27,7 +27,9 @@ export async function ProfileController(app: FastifyInstance) {
       // ✅ Consultamos el perfil desde la tabla "profiles"
       const { data: profile, error } = await supabaseAdmin
         .from('profiles')
-        .select('id, email, name, age, phone, has_completed_onboarding, created_at')
+        .select(
+          'id, email, name, age, phone, has_completed_onboarding, has_active_subscription, created_at'
+        )
         .eq('id', user.id)
         .single()
 
@@ -85,7 +87,9 @@ export async function ProfileController(app: FastifyInstance) {
         .from('profiles')
         .update(updates)
         .eq('id', user.id)
-        .select('id, email, name, age, phone, has_completed_onboarding, created_at')
+        .select(
+          'id, email, name, age, phone, has_completed_onboarding, has_active_subscription, created_at'
+        )
         .single()
 
       if (error) throw error
@@ -123,7 +127,9 @@ export async function ProfileController(app: FastifyInstance) {
         .from('profiles')
         .update({ has_completed_onboarding: true })
         .eq('id', user.id)
-        .select('id, email, name, age, phone, has_completed_onboarding, created_at')
+        .select(
+          'id, email, name, age, phone, has_completed_onboarding, has_active_subscription, created_at'
+        )
         .single()
 
       if (error) throw error
