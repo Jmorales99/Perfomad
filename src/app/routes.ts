@@ -10,5 +10,5 @@ export async function routes(app: FastifyInstance) {
   await app.register(ProfileController, { prefix: '/profile' })
   await app.register(CampaignsController, { prefix: '' })
   await app.register(ImagesController, { prefix: '' })
-  await app.register(SubscriptionController, { prefix: '/subscription' })
+  await app.register(SubscriptionController, { prefix: '' })
 }

@@ -1,77 +1,62 @@
-// src/interfaces/http/controllers/SubscriptionController.ts
-import type { FastifyInstance } from 'fastify'
-import { supabaseClient, supabaseAdmin } from '@/infrastructure/db/supabaseClient'
+import type { FastifyInstance } from "fastify"
+import { verifyUser } from "@/infrastructure/auth/verifyUser"
+import { supabaseAdmin } from "@/infrastructure/db/supabaseClient"
+import axios from "axios"
+
+const MOCK_API_URL = process.env.MOCK_API_URL || "http://localhost:4000"
+const MOCK_API_KEY = process.env.MOCK_API_KEY || "mock-key"
 
 export async function SubscriptionController(app: FastifyInstance) {
-  // 🟦 Obtener estado de la suscripción
-  app.get('/', async (request, reply) => {
+  // ============================================================
+  // 💳 Activar o reactivar suscripción dummy
+  // ============================================================
+  app.post("/subscription/activate-dummy", async (req, reply) => {
     try {
-      const authHeader = request.headers.authorization
-      if (!authHeader) {
-        return reply.status(401).send({ error: 'Token no provisto' })
+      const user = await verifyUser(req, reply)
+      if (!user) return
+
+      // Obtenemos perfil actual
+      const { data: profile } = await supabaseAdmin
+        .from("profiles")
+        .select("plai_mock_user_id")
+        .eq("id", user.id)
+        .maybeSingle()
+
+      let mockUserId = profile?.plai_mock_user_id
+
+      // Si no existe, creamos perfil mock
+      if (!mockUserId) {
+        const { data } = await axios.post(
+          `${MOCK_API_URL}/auth/create_profile`,
+          { email: user.email, name: user.user_metadata?.name ?? "User" },
+          { headers: { "x-api-key": MOCK_API_KEY } }
+        )
+        mockUserId = data.results.id
       }
 
-      const token = authHeader.replace('Bearer ', '')
-      const {
-        data: { user },
-        error: authError,
-      } = await supabaseClient.auth.getUser(token)
-
-      if (authError || !user) {
-        return reply.status(401).send({ error: 'Token inválido o expirado' })
-      }
-
-      const { data: profile, error } = await supabaseAdmin
-        .from('profiles')
-        .select('has_active_subscription')
-        .eq('id', user.id)
-        .single()
-
-      if (error || !profile) {
-        return reply.status(404).send({ error: 'Perfil no encontrado' })
-      }
-
-      return reply.send({
-        has_active_subscription: profile.has_active_subscription === true,
-      })
-    } catch (err) {
-      console.error('❌ Error al obtener suscripción:', err)
-      return reply.status(500).send({ error: 'Error interno del servidor.' })
-    }
-  })
-
-  // 🟦 Activar suscripción dummy (solo para pruebas)
-  app.post('/activate-dummy', async (request, reply) => {
-    try {
-      const authHeader = request.headers.authorization
-      if (!authHeader) {
-        return reply.status(401).send({ error: 'Token no provisto' })
-      }
-
-      const token = authHeader.replace('Bearer ', '')
-      const {
-        data: { user },
-        error: authError,
-      } = await supabaseClient.auth.getUser(token)
-
-      if (authError || !user) {
-        return reply.status(401).send({ error: 'Token inválido o expirado' })
-      }
+      const startDate = new Date().toISOString()
+      const expiryDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
 
       const { error } = await supabaseAdmin
-        .from('profiles')
-        .update({ has_active_subscription: true })
-        .eq('id', user.id)
+        .from("profiles")
+        .update({
+          has_active_subscription: true,
+          plai_mock_user_id: mockUserId,
+          subscription_start: startDate,
+          subscription_expires: expiryDate,
+        })
+        .eq("id", user.id)
 
-      if (error) {
-        console.error('❌ Error al activar suscripción:', error)
-        return reply.status(500).send({ error: 'No se pudo activar la suscripción.' })
-      }
+      if (error) throw error
 
-      return reply.send({ message: 'Suscripción activada (dummy) ✅' })
+      return reply.status(200).send({
+        message: "Suscripción dummy activada o reactivada correctamente ✅",
+        plai_mock_user_id: mockUserId,
+        expires_at: expiryDate,
+      })
     } catch (err) {
-      console.error('❌ Error al activar suscripción:', err)
-      return reply.status(500).send({ error: 'Error interno del servidor.' })
+      req.log.error(err)
+      return reply.status(500).send({ error: "Error al activar suscripción dummy" })
     }
   })
 }

@@ -1,82 +1,41 @@
-import type { FastifyInstance } from 'fastify'
-import { supabaseClient, supabaseAdmin } from '@/infrastructure/db/supabaseClient'
+import type { FastifyInstance } from "fastify"
+import { verifyUser } from "@/infrastructure/auth/verifyUser"
+import { supabaseAdmin } from "@/infrastructure/db/supabaseClient"
 
 export async function ProfileController(app: FastifyInstance) {
-  // ============================================================
-  // 🧠 Obtener el perfil del usuario autenticado
-  // ============================================================
-  app.get('/', async (request, reply) => {
+  // 🧠 Obtener perfil
+  app.get("/", async (req, reply) => {
     try {
-      const authHeader = request.headers.authorization
-      if (!authHeader) {
-        return reply.status(401).send({ error: 'Token no provisto' })
-      }
+      const user = await verifyUser(req, reply)
 
-      const token = authHeader.replace('Bearer ', '')
-
-      // ✅ Verificamos el usuario autenticado
-      const {
-        data: { user },
-        error: authError,
-      } = await supabaseClient.auth.getUser(token)
-
-      if (authError || !user) {
-        return reply.status(401).send({ error: 'Token inválido o expirado' })
-      }
-
-      // ✅ Consultamos el perfil desde la tabla "profiles"
       const { data: profile, error } = await supabaseAdmin
-        .from('profiles')
-        .select(
-          'id, email, name, age, phone, has_completed_onboarding, has_active_subscription, created_at'
-        )
-        .eq('id', user.id)
+        .from("profiles")
+        .select("id, email, name, age, phone, has_completed_onboarding, has_active_subscription, created_at")
+        .eq("id", user.id)
         .single()
 
       if (error || !profile) {
-        return reply.status(404).send({ error: 'Perfil no encontrado' })
+        return reply.status(404).send({ error: "Perfil no encontrado" })
       }
 
       return reply.status(200).send(profile)
     } catch (err) {
-      console.error('❌ Error al obtener el perfil:', err)
-      return reply.status(500).send({ error: 'Error interno del servidor.' })
+      req.log.error(err)
+      return reply.code(500).send({ error: "Error al obtener el perfil" })
     }
   })
 
-  // ============================================================
-  // 🧩 Actualizar campos del perfil (nombre, edad, teléfono, etc.)
-  // ============================================================
-  app.patch('/', async (request, reply) => {
+  // ✏️ Actualizar perfil
+  app.patch("/", async (req, reply) => {
     try {
-      const authHeader = request.headers.authorization
-      if (!authHeader) {
-        return reply.status(401).send({ error: 'Token no provisto' })
-      }
+      const user = await verifyUser(req, reply)
+      const { name, age, phone } = req.body as any
 
-      const token = authHeader.replace('Bearer ', '')
-
-      const {
-        data: { user },
-        error: authError,
-      } = await supabaseClient.auth.getUser(token)
-
-      if (authError || !user) {
-        return reply.status(401).send({ error: 'Token inválido o expirado' })
-      }
-
-      const { name, age, phone } = request.body as {
-        name?: string
-        age?: number
-        phone?: string
-      }
-
-      // 🧠 Validación ligera
       if (!name && !age && !phone) {
-        return reply.status(400).send({ error: 'No se enviaron campos para actualizar.' })
+        return reply.status(400).send({ error: "No se enviaron campos para actualizar" })
       }
 
-      const updates: Record<string, any> = {
+      const updates = {
         ...(name && { name }),
         ...(age && { age }),
         ...(phone && { phone }),
@@ -84,60 +43,37 @@ export async function ProfileController(app: FastifyInstance) {
       }
 
       const { data, error } = await supabaseAdmin
-        .from('profiles')
+        .from("profiles")
         .update(updates)
-        .eq('id', user.id)
-        .select(
-          'id, email, name, age, phone, has_completed_onboarding, has_active_subscription, created_at'
-        )
+        .eq("id", user.id)
+        .select()
         .single()
 
       if (error) throw error
-
       return reply.status(200).send(data)
     } catch (err) {
-      console.error('❌ Error al actualizar perfil:', err)
-      return reply.status(500).send({ error: 'Error al actualizar el perfil.' })
+      req.log.error(err)
+      return reply.code(500).send({ error: "Error al actualizar el perfil" })
     }
   })
 
-  // ============================================================
-  // ✅ Marcar el onboarding como completado
-  // ============================================================
-  app.patch('/onboarding', async (request, reply) => {
+  // ✅ Completar onboarding
+  app.patch("/onboarding", async (req, reply) => {
     try {
-      const authHeader = request.headers.authorization
-      if (!authHeader) {
-        return reply.status(401).send({ error: 'Token no provisto' })
-      }
+      const user = await verifyUser(req, reply)
 
-      const token = authHeader.replace('Bearer ', '')
-
-      const {
-        data: { user },
-        error: authError,
-      } = await supabaseClient.auth.getUser(token)
-
-      if (authError || !user) {
-        return reply.status(401).send({ error: 'Token inválido o expirado' })
-      }
-
-      // 🔄 Actualizamos el campo en la base de datos
       const { data, error } = await supabaseAdmin
-        .from('profiles')
+        .from("profiles")
         .update({ has_completed_onboarding: true })
-        .eq('id', user.id)
-        .select(
-          'id, email, name, age, phone, has_completed_onboarding, has_active_subscription, created_at'
-        )
+        .eq("id", user.id)
+        .select()
         .single()
 
       if (error) throw error
-
       return reply.status(200).send(data)
     } catch (err) {
-      console.error('❌ Error al actualizar onboarding:', err)
-      return reply.status(500).send({ error: 'Error al actualizar perfil.' })
+      req.log.error(err)
+      return reply.code(500).send({ error: "Error al actualizar onboarding" })
     }
   })
 }

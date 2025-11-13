@@ -20,10 +20,17 @@ export interface Campaign {
   created_at: string
   number?: number
   images?: CampaignImage[]
+  mock_campaign_id?: string
+  mock_stats?: {
+    spend: number
+    impressions: number
+    clicks: number
+    ctr: number
+  }
 }
 
 export class SupabaseCampaignsRepository {
-  // ✅ Listar campañas con imágenes firmadas y adaptadas
+  // ✅ Listar campañas
   async listByUser(userId: string): Promise<Campaign[]> {
     const { data, error } = await supabaseClient
       .from("campaigns")
@@ -51,7 +58,7 @@ export class SupabaseCampaignsRepository {
         imgs.map(async (img) => {
           const { data: signedUrl } = await supabaseAdmin.storage
             .from("campaign-images")
-            .createSignedUrl(img.file_path, 60 * 60) // 1h
+            .createSignedUrl(img.file_path, 60 * 60)
           return {
             id: img.id,
             path: img.file_path,
@@ -66,9 +73,11 @@ export class SupabaseCampaignsRepository {
     return campaigns
   }
 
-  // ✅ Crear campaña con múltiples plataformas e imágenes
+  // ✅ Crear campaña (ahora permite mock_campaign_id y mock_stats)
   async create(
-    campaign: Omit<Campaign, "id" | "created_at" | "images"> & { images?: { path: string }[] }
+    campaign: Omit<Campaign, "id" | "created_at" | "images"> & {
+      images?: { path: string }[]
+    }
   ) {
     const { data: lastCampaign, error: fetchError } = await supabaseClient
       .from("campaigns")
@@ -94,9 +103,11 @@ export class SupabaseCampaignsRepository {
         start_date: campaign.start_date ?? new Date().toISOString(),
         end_date: campaign.end_date ?? null,
         number: nextNumber,
+        mock_campaign_id: campaign.mock_campaign_id ?? null,
+        mock_stats: campaign.mock_stats ?? null,
       })
       .select()
-      .single()
+      .maybeSingle()
 
     if (error) throw error
 
@@ -117,8 +128,12 @@ export class SupabaseCampaignsRepository {
     return created
   }
 
-  // ✅ Actualizar campaña e imágenes asociadas
-  async update(userId: string, id: string, updates: Partial<Campaign> & { images?: { path: string }[] }) {
+  // ✅ Actualizar campaña (permite mock_campaign_id y mock_stats)
+  async update(
+    userId: string,
+    id: string,
+    updates: Partial<Campaign> & { images?: { path: string }[] }
+  ) {
     const { images, ...campaignData } = updates
 
     const { data, error } = await supabaseClient
@@ -127,7 +142,7 @@ export class SupabaseCampaignsRepository {
       .eq("user_id", userId)
       .eq("id", id)
       .select()
-      .single()
+      .maybeSingle()
 
     if (error) throw error
 
@@ -157,5 +172,18 @@ export class SupabaseCampaignsRepository {
 
     if (error) throw error
     return true
+  }
+
+
+  async findById(userId: string, id: string) {
+    const { data, error } = await supabaseClient
+      .from("campaigns")
+      .select("*")
+      .eq("user_id", userId)
+      .eq("id", id)
+      .single()
+
+    if (error) throw error
+    return data
   }
 }

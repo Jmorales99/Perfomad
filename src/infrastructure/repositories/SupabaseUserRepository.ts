@@ -92,23 +92,25 @@ export class SupabaseUserRepository implements UsersRepository {
     return data
   }
 
-  async loginUser({
+  async loginUser({ email, password }: LoginDTO): Promise<{ access_token: string; user: any }> {
+  // 👇 usa el cliente normal, no el admin
+  const { data, error } = await supabaseClient.auth.signInWithPassword({
     email,
     password,
-  }: LoginDTO): Promise<{ access_token: string; user: any }> {
-    const { data, error } = await supabaseClient.auth.signInWithPassword({
-      email,
-      password,
-    })
+  })
 
-    if (error) {
-      console.error("❌ Error al iniciar sesión:", error)
-      throw new Error("Credenciales inválidas o cuenta no confirmada.")
-    }
-
-    return {
-      access_token: data.session?.access_token!,
-      user: data.user,
-    }
+  if (error) {
+    console.error("❌ Error al iniciar sesión:", error)
+    throw new Error("Credenciales inválidas o cuenta no confirmada.")
   }
+
+  if (!data.session?.access_token) {
+    throw new Error("No se pudo obtener token de sesión.")
+  }
+
+  return {
+    access_token: data.session.access_token,
+    user: data.user,
+  }
+}
 }
