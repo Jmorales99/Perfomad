@@ -23,7 +23,7 @@ export class RegisterUser {
     if (!phoneRegex.test(phone))
       throw new Error("El número de teléfono debe tener un formato válido (E.164).")
 
-    // 👤 Crear usuario en Supabase Auth
+    // 👤 Crear usuario en Supabase Auth (solo email + password)
     const { id } = await this.usersRepository.createUser({
       email,
       password,
@@ -31,22 +31,21 @@ export class RegisterUser {
       age,
     })
 
-    /**
-     * 🚀 Comportamiento según entorno:
-     * - En producción: el trigger de Supabase creará el perfil al confirmar el email.
-     * - En desarrollo: el perfil se crea manualmente si no existe aún.
-     */
-    if (process.env.NODE_ENV === "development") {
-      console.log("🧑‍💻 [DEV] Verificando existencia de perfil...")
-
+    // 🚀 Crear perfil con información adicional (phone, etc.)
+    // Solo si el usuario fue creado exitosamente (no está esperando confirmación)
+    try {
       const existingProfile = await this.usersRepository.findProfileById(id)
 
       if (!existingProfile) {
-        console.log("📄 [DEV] Creando perfil manualmente (modo desarrollo)...")
         await this.usersRepository.insertProfile(id, email, name, age, phone)
+        console.log("✅ Perfil creado exitosamente")
       } else {
-        console.log("✅ [DEV] Perfil ya existente, no se inserta duplicado.")
+        console.log("✅ Perfil ya existe")
       }
+    } catch (profileError: any) {
+      // Si falla la creación del perfil, no fallar todo el registro
+      // El usuario ya está creado, el perfil se puede crear después
+      console.error("⚠️ No se pudo crear el perfil, pero el usuario fue creado:", profileError.message)
     }
 
     return {

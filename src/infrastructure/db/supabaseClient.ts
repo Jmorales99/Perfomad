@@ -1,16 +1,16 @@
 import { createClient } from "@supabase/supabase-js";
 import { env } from "../../config/env.js";
 
-// Cliente normal (anon) — usado por el frontend o para lecturas públicas
+// Cliente normal (publishable/public) — usado por el frontend o para lecturas públicas
 export const supabaseClient = createClient(
   env.SUPABASE_URL,
-  env.SUPABASE_ANON_KEY,
+  env.SUPABASE_PUBLISHABLE_KEY,
   { auth: { persistSession: false } }
 );
 
-// Cliente administrador (server-side) — SIEMPRE inicializado
+// Cliente administrador (secret key) — SIEMPRE inicializado, tiene permisos de admin
 export const supabaseAdmin = createClient(
   env.SUPABASE_URL,
-  env.SUPABASE_SERVICE_ROLE_KEY,
+  env.SUPABASE_SECRET_KEY,
   { auth: { persistSession: false } }
 );

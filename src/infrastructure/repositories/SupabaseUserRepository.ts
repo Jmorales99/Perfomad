@@ -13,22 +13,11 @@ export class SupabaseUserRepository implements UsersRepository {
     name,
     age,
   }: CreateUserDTO): Promise<{ id: string }> {
-    if (!isProd) {
-      const { data, error } = await supabaseAdmin.auth.admin.createUser({
-        email,
-        password,
-        user_metadata: { name, age: Number(age) },
-        email_confirm: true,
-      })
-
-      if (error) {
-        console.error("❌ Error al crear usuario (dev):", error)
-        throw new Error(error.message || "Error al crear usuario (dev).")
-      }
-
-      return { id: data.user!.id }
-    }
-
+    // SIMPLIFIED: Just like Supabase Dashboard - email + password only
+    // Store extra data (name, age) in user_metadata
+    // Profile with phone, etc. is created separately
+    console.log("🔍 Creating user (email + password)...")
+    
     const { data, error } = await supabaseClient.auth.signUp({
       email,
       password,
@@ -39,16 +28,26 @@ export class SupabaseUserRepository implements UsersRepository {
     })
 
     if (error) {
-      console.error("❌ Error al crear usuario:", error)
-      throw new Error(error.message || "Error al registrar el usuario.")
+      console.error("❌ Error:", error.message)
+      throw new Error(error.message || "Error al crear usuario.")
     }
 
-    if (!data.user) {
-      throw new Error("No se pudo crear el usuario.")
+    // Return user ID if available, or throw helpful error
+    if (data.user) {
+      console.log("✅ Usuario creado:", data.user.id)
+      return { id: data.user.id }
     }
 
-    return { id: data.user.id }
+    // User created but needs email confirmation
+    if (data.session?.user) {
+      console.log("✅ Usuario creado y confirmado:", data.session.user.id)
+      return { id: data.session.user.id }
+    }
+
+    // User was created but requires email confirmation
+    throw new Error("Usuario creado. Por favor confirma tu email para continuar.")
   }
+
 
   // 🧩 insertProfile ahora acepta también el teléfono
   async insertProfile(
@@ -58,15 +57,20 @@ export class SupabaseUserRepository implements UsersRepository {
     age: number,
     phone: string
   ): Promise<void> {
-    if (isProd) return
-
     const { error } = await supabaseAdmin
       .from("profiles")
       .insert({ id, email, name, age, phone })
+      .select()
+      .single()
 
     if (error) {
-      console.error("❌ Error al guardar perfil (dev):", error)
-      throw new Error("Error al guardar el perfil del usuario (dev).")
+      // If profile already exists (from trigger or previous attempt), that's ok
+      if (error.code === "23505") { // Unique violation
+        console.log("✅ Perfil ya existe, omitiendo creación")
+        return
+      }
+      console.error("❌ Error al guardar perfil:", error)
+      throw new Error("Error al guardar el perfil del usuario.")
     }
   }
 
