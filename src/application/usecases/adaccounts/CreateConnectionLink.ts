@@ -1,22 +1,28 @@
-import { PlaiApiClient } from "@/infrastructure/services/PlaiApiClient"
-import type { Platform } from "@/infrastructure/repositories/SupabaseAdAccountsRepository"
+import { PlatformApiClientFactory } from "@/infrastructure/services/platforms/PlatformApiClientFactory"
+import { StateManager } from "@/infrastructure/security/StateManager"
+import type { ClientsRepository } from "@/domain/repositories/ClientsRepository"
+import type { Platform } from "@/domain/repositories/AdAccountsRepository"
 
 export class CreateConnectionLink {
-  constructor(private plaiApi: PlaiApiClient) {}
+  constructor(
+    private stateManager: StateManager,
+    private clientsRepo: ClientsRepository
+  ) {}
 
   async execute(
-    plaiUserId: string,
+    userId: string,
+    clientId: string,
     platform: Platform,
     redirectUri?: string,
-    state?: string
+    customState?: string
   ): Promise<string> {
-    const link = await this.plaiApi.createConnectionLink(
-      plaiUserId,
-      platform,
-      redirectUri,
-      state
-    )
+    const client = await this.clientsRepo.getById(userId, clientId)
+    if (!client) {
+      throw new Error("Client not found or does not belong to user")
+    }
 
-    return link
+    const state = customState ?? (await this.stateManager.generateState(userId, clientId, platform, redirectUri))
+    const platformClient = PlatformApiClientFactory.createClient(platform)
+    return platformClient.getOAuthUrl(redirectUri ?? "", state)
   }
 }

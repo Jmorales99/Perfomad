@@ -41,6 +41,12 @@ Así, cada conexión de cuenta publicitaria queda asociada a una empresa interna
 - **OAuth state**: One-time, con expiración; debe incluir `client_id` y marcarse `used` tras el callback.
 - **Storage**: Si se usan buckets, políticas por carpeta (`user_<uid>` o `client_<id>`), no acceso abierto al bucket.
 
+## Endpoints OAuth por plataforma (client_id)
+
+- **POST /v1/platforms/:platform/connect-link** (auth): Body `{ "clientId": "uuid", "redirect_uri"?: "..." }`. Devuelve `{ "url": "..." }` (URL de OAuth del proveedor). El state guardado incluye `client_id`.
+- **GET /v1/platforms/:platform/callback** (público): Query `code`, `state`, opcional `redirect_uri`. Intercambia code por tokens y hace upsert en `ad_accounts` con el `client_id` del state. Redirige al front (`FRONTEND_URL`) con `?connect=success` o `?connect=error&message=...`.
+- **POST /v1/platforms/:platform/sync-accounts** (auth): Body `{ "clientId": "uuid" }`. Sincroniza cuentas conectadas para ese client.
+
 ## Entrypoint y build
 
 - **Dev**: `npm run dev` → `tsx watch src/index.ts`.  
