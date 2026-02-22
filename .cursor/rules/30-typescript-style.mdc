@@ -1,0 +1,12 @@
+---
+description: Estilo TypeScript y organización
+alwaysApply: true
+---
+
+- Nombres consistentes:
+  - *.routes.ts, *.controller.ts, *.plugin.ts, *.middleware.ts, *.repository.ts, *.usecase.ts
+- Tipos explícitos en boundaries (HTTP input/output, DB rows, integraciones).
+- Evitar any. Si es inevitable, aislarlo y documentar por qué.
+- Mantener funciones pequeñas; helpers repetidos van a módulos compartidos.
+- Errores:
+  - crea errores de dominio (por ej. NotFound, Unauthorized, ValidationError) y mapéalos a HTTP en controllers.

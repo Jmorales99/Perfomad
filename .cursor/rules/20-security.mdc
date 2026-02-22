@@ -1,0 +1,16 @@
+---
+description: Seguridad (OAuth, tokens, Supabase, storage)
+alwaysApply: true
+---
+
+- Tokens OAuth solo en servidor. Nunca retornar access_token/refresh_token al front.
+- Refresh tokens deben almacenarse cifrados (AES-GCM o equivalente) usando key en env vars.
+- No guardar tokens en localStorage/sessionStorage.
+- service_role key de Supabase solo server (nunca en código compartido con cliente).
+- Logs: redactar secretos (nunca imprimir tokens, headers, cookies).
+- OAuth:
+  - state es one-time y con expiración (ya existe oauth_states con used/expires_at).
+  - state DEBE incluir client_id (DB ya lo tiene). El callback debe validar state y marcar used.
+- Storage:
+  - prohibido policies abiertas por bucket (solo acceso scope por carpeta user_<uid> o client_<id>).
+  - al subir imágenes, el path debe incluir user_<uid> (o client_<id> si implementas eso).

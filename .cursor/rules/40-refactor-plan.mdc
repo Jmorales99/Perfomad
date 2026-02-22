@@ -1,0 +1,12 @@
+---
+description: Plan de refactor incremental (no romper producción)
+alwaysApply: true
+---
+
+- Primero: auditoría del entrypoint y wiring actual (server/routes/controllers).
+- Luego: introducir client_id en el flujo OAuth y repos.
+- Luego: endpoints mínimos para clients (GET/POST).
+- Después: consolidar la capa HTTP en src/interfaces/http y eliminar duplicación src/app vs src/interfaces.
+- Después: mover integrations (services/platforms -> infrastructure/integrations).
+- Limpieza: mover *_DEBUG.ts / *_TEST*.ts fuera de src/ y excluirlos en tsconfig.
+- Al final: ejecutar npm run lint y npm run typecheck (si existen) y documentar resultados.

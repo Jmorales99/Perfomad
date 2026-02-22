@@ -1,0 +1,13 @@
+---
+description: Reglas globales del repo (aplican siempre)
+alwaysApply: true
+---
+
+- Haz cambios pequeños e incrementales (evita “big bang refactor”).
+- Mantén compatibilidad: no rompas endpoints existentes (paths, payloads, status codes).
+- No cambies el esquema DB (ya hay migración aplicada: clients + client_id). Solo adapta el código.
+- No inventes dependencias nuevas salvo que sea imprescindible. Si agregas una, justifica con claridad.
+- Prohibido loguear secretos: access/refresh tokens, service_role key, Authorization headers, cookies, sesiones.
+- Cuando algo no puedas verificar ejecutándolo (lint/typecheck/tests), dilo explícitamente y deja los comandos exactos para verificar.
+- Antes de mover archivos grandes: busca todas las referencias y actualiza imports.
+- Prefiere composición/DI (inyección) sobre imports directos desde infraestructura.

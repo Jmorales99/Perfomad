@@ -1,0 +1,22 @@
+---
+description: Arquitectura por capas (interfaces -> application -> domain -> infrastructure)
+alwaysApply: true
+---
+
+CAPAS:
+- HTTP/Interfaces: src/interfaces/http (server, routes, controllers, plugins, middlewares, openapi).
+- Application: src/application/usecases (casos de uso). NO depende de Supabase repos concretos.
+- Domain: src/domain/repositories (interfaces/contratos).
+- Infrastructure: src/infrastructure (db, repositories, security, integrations).
+
+REGLAS:
+- Controller: valida input, llama usecase, mapea a respuesta HTTP.
+- Usecase: lógica de negocio. Solo conoce interfaces (repos e integraciones).
+- Repository (domain): contrato.
+- Repository (infra): implementación (Supabase).
+- Integrations: clientes de Google/Meta/TikTok aislados en infrastructure/integrations.
+
+MULTI-EMPRESA INTERNA:
+- Todo dato de negocio se segmenta por (user_id, client_id).
+- Los endpoints que crean/leen ad accounts y datos de campañas deben aceptar o resolver client_id.
+- OAuth state debe guardar client_id y el callback debe usar ese client_id para persistir tokens/ad_accounts.
