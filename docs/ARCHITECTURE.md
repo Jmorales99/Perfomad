@@ -41,6 +41,12 @@ Así, cada conexión de cuenta publicitaria queda asociada a una empresa interna
 - **OAuth state**: One-time, con expiración; debe incluir `client_id` y marcarse `used` tras el callback.
 - **Storage**: Si se usan buckets, políticas por carpeta (`user_<uid>` o `client_<id>`), no acceso abierto al bucket.
 
+## Endpoints clients (empresas internas)
+
+- **GET /v1/clients** (auth): Lista las empresas internas del usuario.
+- **POST /v1/clients** (auth): Crea una empresa. Body: `{ "name": string, "description"?: string }`. `name` obligatorio y no vacío.
+- **GET /v1/clients/:id** (auth): Obtiene una empresa por id (debe pertenecer al usuario). 404 si no existe.
+
 ## Endpoints OAuth por plataforma (client_id)
 
 - **POST /v1/platforms/:platform/connect-link** (auth): Body `{ "clientId": "uuid", "redirect_uri"?: "..." }`. Devuelve `{ "url": "..." }` (URL de OAuth del proveedor). El state guardado incluye `client_id`.
@@ -53,3 +59,5 @@ Así, cada conexión de cuenta publicitaria queda asociada a una empresa interna
 - **Build**: `npm run build` → `tsc` + `tsc-alias` (reescribe alias `@/` a rutas relativas con `.js`).  
 - **Start**: `npm run start` → `node dist/index.js`.  
 - Variables de entorno: ver `.env.example`. Validación en `src/config/env.ts`.
+
+**Checklist tras cambios de infra:** ejecutar `npm run build`, `npm run start`, `npm run dev` (y en Vercel/Node si aplica). Código propio solo ESM (sin `require()`); scripts en `scripts/` deben ser ESM (`.js` con `import`) o CommonJS (`.cjs`). Si se añade un alias en `tsconfig` `paths`, actualizar también el script de build que usa `tsc-alias`.

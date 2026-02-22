@@ -4,10 +4,12 @@ import { ProfileController } from '../interfaces/http/controllers/ProfileControl
 import { CampaignsController } from '../interfaces/http/controllers/CampaignsController.js'
 import { ImagesController } from '@/interfaces/http/controllers/ImagesController.js'
 import { PlatformsController } from '@/interfaces/http/controllers/PlatformsController.js'
+import { ClientsController } from '@/interfaces/http/controllers/ClientsController.js'
 
 export async function routes(app: FastifyInstance) {
   await app.register(userRoutes, { prefix: '/users' })
   await app.register(ProfileController, { prefix: '/profile' })
+  await app.register(ClientsController, { prefix: '/clients' })
   await app.register(CampaignsController, { prefix: '' })
   await app.register(ImagesController, { prefix: '' })
   await app.register(PlatformsController, { prefix: '' })
