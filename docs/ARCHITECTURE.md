@@ -6,7 +6,7 @@ Backend TypeScript con Fastify, Supabase y Vercel. Un usuario (login) tiene una 
 
 | Capa | Ubicación | Responsabilidad |
 |------|-----------|-----------------|
-| **HTTP / Interfaces** | `src/interfaces/http` (y actualmente `src/app` para server/routes) | Controllers, rutas, plugins, middlewares. Valida input, llama use cases, mapea a HTTP. |
+| **HTTP / Interfaces** | `src/interfaces/http` (server.ts, routes/, controllers/, plugins/, middlewares/, openapi/) | Controllers, rutas, plugins, middlewares. Valida input, llama use cases, mapea a HTTP. Entrypoint importa `buildServer` desde aquí. |
 | **Application** | `src/application/usecases` | Casos de uso. Lógica de negocio. Solo depende de interfaces (repos), no de implementaciones concretas. |
 | **Domain** | `src/domain/repositories` | Contratos (interfaces) de repositorios. |
 | **Infrastructure** | `src/infrastructure` | DB (Supabase), repositorios, seguridad (Crypto, StateManager), integraciones (plataformas). |

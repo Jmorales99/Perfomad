@@ -4,7 +4,7 @@ alwaysApply: true
 ---
 
 CAPAS:
-- HTTP/Interfaces: src/interfaces/http (server, routes, controllers, plugins, middlewares, openapi).
+- HTTP/Interfaces: src/interfaces/http (server.ts, routes/, controllers/, plugins/, middlewares/, openapi/). Una sola capa HTTP; entrypoint importa buildServer desde aquí.
 - Application: src/application/usecases (casos de uso). NO depende de Supabase repos concretos.
 - Domain: src/domain/repositories (interfaces/contratos).
 - Infrastructure: src/infrastructure (db, repositories, security, integrations).
