@@ -24,6 +24,8 @@ export const env = z
     // Mock API (for development)
     MOCK_API_URL: z.string().url().optional(), // Mock API URL (dev only)
     MOCK_API_KEY: z.string().min(1).optional(), // Mock API Key (dev only)
+    // CORS allowed origin (frontend URL)
+    FRONTEND_URL: z.string().url().optional(),
   })
   .transform((data) => ({
     ...data,

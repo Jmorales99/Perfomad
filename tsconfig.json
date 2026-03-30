@@ -2,7 +2,7 @@
   "compilerOptions": {
     "target": "ES2020",
     "module": "ESNext",
-    "moduleResolution": "Node",
+    "moduleResolution": "bundler",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
@@ -11,7 +11,7 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
 
-    // ✅ Rutas base para usar "@/"
+    "rootDir": "./src",
     "baseUrl": "./src",
     "paths": {
       "@/*": ["*"]

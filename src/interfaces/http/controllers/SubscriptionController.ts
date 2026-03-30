@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify"
+import type { InjectPayload } from "light-my-request"
 import { verifyUser } from "@/infrastructure/auth/verifyUser"
 import { verifyUserAndSubscription } from "@/infrastructure/auth/verifySubscription"
 import { supabaseAdmin } from "@/infrastructure/db/supabaseClient"
@@ -245,7 +246,7 @@ export async function SubscriptionController(app: FastifyInstance) {
       method: "POST",
       url: "/subscription/activate",
       headers: req.headers,
-      payload: req.body,
+      payload: req.body as InjectPayload,
     }).then((response) => {
       return reply.status(response.statusCode).send(response.json())
     })
