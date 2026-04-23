@@ -1,6 +1,5 @@
 import { SupabaseCampaignsRepository } from "@/infrastructure/repositories/SupabaseCampaignsRepository"
 import { EnrichCampaignsWithMetrics } from "./EnrichCampaignsWithMetrics"
-import { PlaiApiClient } from "@/infrastructure/services/PlaiApiClient"
 
 export class GetDashboardMetrics {
   constructor(
@@ -8,21 +7,23 @@ export class GetDashboardMetrics {
     private enrichCampaigns?: EnrichCampaignsWithMetrics
   ) {}
 
-  async execute(userId: string) {
+  async execute(userId: string, campaigns?: any[], clientId?: string) {
     // 1. Get all campaigns for the user (enriched with metrics if available)
-    const campaigns = this.enrichCampaigns 
-      ? await this.enrichCampaigns.execute(userId)
-      : await this.campaignsRepo.listByUser(userId)
+    const userCampaigns = campaigns || (this.enrichCampaigns
+      ? await this.enrichCampaigns.execute(userId, clientId)
+      : clientId
+        ? await this.campaignsRepo.listByUserAndClient(userId, clientId)
+        : await this.campaignsRepo.listByUser(userId))
 
     // 2. Calculate aggregated metrics
-    const totalCampaigns = campaigns.length
-    const activeCampaigns = campaigns.filter((c) => c.status === "active").length
-    const pausedCampaigns = campaigns.filter((c) => c.status === "paused").length
-    const completedCampaigns = campaigns.filter((c) => c.status === "completed").length
+    const totalCampaigns = userCampaigns.length
+    const activeCampaigns = userCampaigns.filter((c) => c.status === "active").length
+    const pausedCampaigns = userCampaigns.filter((c) => c.status === "paused").length
+    const completedCampaigns = userCampaigns.filter((c) => c.status === "completed").length
 
     // 3. Calculate total spend and budget
-    const totalSpend = campaigns.reduce((sum, c) => sum + (c.spend_usd || 0), 0)
-    const totalBudget = campaigns.reduce((sum, c) => sum + (c.budget_usd || 0), 0)
+    const totalSpend = userCampaigns.reduce((sum, c) => sum + (c.spend_usd || 0), 0)
+    const totalBudget = userCampaigns.reduce((sum, c) => sum + (c.budget_usd || 0), 0)
 
     // 4. Aggregate metrics from mock_stats
     let totalImpressions = 0
@@ -31,12 +32,12 @@ export class GetDashboardMetrics {
     let totalRevenue = 0
     let totalSales = 0
 
-    campaigns.forEach((campaign) => {
+    userCampaigns.forEach((campaign) => {
       if (campaign.mock_stats) {
         const stats = campaign.mock_stats as any
         
         // Check if it's multi-platform format: { meta: {...}, google_ads: {...} }
-        const platforms = ['meta', 'google_ads', 'linkedin']
+        const platforms = ['meta', 'google_ads', 'linkedin', 'tiktok']
         const hasPlatformKeys = typeof stats === 'object' && !Array.isArray(stats) && 
           platforms.some(p => p in stats)
         
@@ -94,7 +95,7 @@ export class GetDashboardMetrics {
     const overallROA = totalSpend > 0 ? totalRevenue / totalSpend : undefined
 
     // 6. Get recent campaigns (last 5)
-    const recentCampaigns = campaigns
+    const recentCampaigns = userCampaigns
       .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
       .slice(0, 5)
       .map((c) => ({
@@ -109,8 +110,8 @@ export class GetDashboardMetrics {
 
     // 7. Calculate platform distribution
     const platformCounts: Record<string, number> = {}
-    campaigns.forEach((c) => {
-      c.platforms.forEach((platform) => {
+    userCampaigns.forEach((c) => {
+      c.platforms.forEach((platform: string) => {
         platformCounts[platform] = (platformCounts[platform] || 0) + 1
       })
     })

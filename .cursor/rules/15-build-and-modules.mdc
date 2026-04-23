@@ -1,0 +1,14 @@
+---
+description: Build, ESM (type module), tsconfig y tsc-alias
+alwaysApply: true
+---
+
+TYPE MODULE (package.json "type": "module"):
+- En src/ (runtime) usar solo ESM (import/export). No usar require().
+- Scripts en scripts/: ESM (.js con import) o CommonJS (.cjs) si realmente lo requieren.
+- Tras cambios de infra, verificar: npm run build, npm run start, npm run dev (Windows + Node/Vercel).
+
+TSCONFIG Y TSC-ALIAS:
+- tsconfig.json: outDir "./dist" y paths/baseUrl consistentes.
+- Alias "@/*" se reescribe en build con tsc-alias (tsc && tsc-alias -p tsconfig.json -f -fe .js).
+- Si se añaden nuevos aliases en tsconfig paths, mantenerlos compatibles con el build (documentar y actualizar scripts).

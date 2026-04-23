@@ -3,14 +3,19 @@ description: Seguridad (OAuth, tokens, Supabase, storage)
 alwaysApply: true
 ---
 
-- Tokens OAuth solo en servidor. Nunca retornar access_token/refresh_token al front.
-- Refresh tokens deben almacenarse cifrados (AES-GCM o equivalente) usando key en env vars.
+- Tokens OAuth solo en servidor. Nunca retornar access_token/refresh_token al front (ni en JSON, ni en redirects, ni en logs).
+- Refresh tokens deben almacenarse cifrados (AES-256-GCM o equivalente) usando key en env vars (TOKEN_ENCRYPTION_KEY).
 - No guardar tokens en localStorage/sessionStorage.
-- service_role key de Supabase solo server (nunca en código compartido con cliente).
-- Logs: redactar secretos (nunca imprimir tokens, headers, cookies).
-- OAuth:
-  - state es one-time y con expiración (ya existe oauth_states con used/expires_at).
-  - state DEBE incluir client_id (DB ya lo tiene). El callback debe validar state y marcar used.
+- Supabase service_role key solo server (nunca en código compartido con cliente).
+- Logs: redactar secretos (nunca imprimir tokens, headers Authorization, cookies, service_role).
+
+- OAuth callback (endpoint público):
+  - Validar state: existe, used=false, no expirado, y que oauth_states.platform coincida con :platform de la URL.
+  - Preferir marcar used=true lo antes posible (idealmente antes del exchange) para evitar replay. Si el exchange falla, NO “desusar” el state.
+  - Al redirigir al front: solo query params genéricos (connect=success | connect=error&message=...). Nunca tokens, raw errors ni detalles sensibles en URL.
+
+- OAuth state: one-time con expiración; debe incluir client_id. Callback valida y marca used.
+
 - Storage:
-  - prohibido policies abiertas por bucket (solo acceso scope por carpeta user_<uid> o client_<id>).
-  - al subir imágenes, el path debe incluir user_<uid> (o client_<id> si implementas eso).
+  - Prohibido policies abiertas por bucket. Acceso siempre scoped por carpeta user_<uid> (o client_<id> si aplica).
+  - Al subir imágenes, el path debe incluir user_<uid> o client_<id>.

@@ -5,38 +5,90 @@ import { supabaseAdmin } from "@/infrastructure/db/supabaseClient"
 import { SupabaseCampaignsRepository } from "@/infrastructure/repositories/SupabaseCampaignsRepository"
 import { SupabaseAdAccountsRepository } from "@/infrastructure/repositories/SupabaseAdAccountsRepository"
 import { CampaignMetricsHistoryRepository } from "@/infrastructure/repositories/CampaignMetricsHistoryRepository"
-import { PlaiApiClient } from "@/infrastructure/services/PlaiApiClient"
 import { CreateCampaign } from "@/application/usecases/campaigns/CreateCampaign"
 import { SyncCampaignMetrics } from "@/application/usecases/campaigns/SyncCampaignMetrics"
 import { GetCampaignInsights } from "@/application/usecases/campaigns/GetCampaignInsights"
 import { GetDashboardMetrics } from "@/application/usecases/campaigns/GetDashboardMetrics"
 import { EnrichCampaignsWithMetrics } from "@/application/usecases/campaigns/EnrichCampaignsWithMetrics"
+import { SyncCampaignBudgetFromPlatform } from "@/application/usecases/campaigns/SyncCampaignBudgetFromPlatform"
+import {
+  ListCampaignAdSets,
+  ListAdSetAds,
+} from "@/application/usecases/platforms/ListCampaignAdSets"
+import { OptimizationConfigRepository } from "@/infrastructure/repositories/OptimizationConfigRepository"
+import { OptimizationRepository } from "@/infrastructure/repositories/OptimizationRepository"
+import { BenchmarksRepository } from "@/infrastructure/repositories/BenchmarksRepository"
+import { ClaudeClient } from "@/infrastructure/integrations/llm/ClaudeClient"
+import { BuildOptimizationInput } from "@/application/usecases/optimization/BuildOptimizationInput"
+import { AnalyzeCampaignOptimization } from "@/application/usecases/optimization/AnalyzeCampaignOptimization"
+import { ApplyOptimizationRecommendation } from "@/application/usecases/optimization/ApplyOptimizationRecommendation"
+import { ListOptimizationRuns } from "@/application/usecases/optimization/ListOptimizationRuns"
+import { GetLatestRecommendations } from "@/application/usecases/optimization/GetLatestRecommendations"
+import type { Platform } from "@/infrastructure/repositories/SupabaseAdAccountsRepository"
+import { createCampaignSchema } from "@/application/schemas/CreateCampaignSchema"
 
 export async function CampaignsController(app: FastifyInstance) {
   const campaignsRepo = new SupabaseCampaignsRepository()
   const adAccountsRepo = new SupabaseAdAccountsRepository()
-  const plaiApi = new PlaiApiClient()
-  const createCampaign = new CreateCampaign(campaignsRepo, adAccountsRepo, plaiApi)
+  const createCampaign = new CreateCampaign(campaignsRepo, adAccountsRepo)
   const metricsHistoryRepo = new CampaignMetricsHistoryRepository()
-  const syncCampaignMetrics = new SyncCampaignMetrics(campaignsRepo, metricsHistoryRepo, plaiApi)
-  const getCampaignInsights = new GetCampaignInsights(campaignsRepo, metricsHistoryRepo, plaiApi)
-  const enrichCampaignsWithMetrics = new EnrichCampaignsWithMetrics(campaignsRepo, plaiApi)
+  const syncCampaignMetrics = new SyncCampaignMetrics(campaignsRepo, metricsHistoryRepo)
+  const getCampaignInsights = new GetCampaignInsights(campaignsRepo, metricsHistoryRepo)
+  const enrichCampaignsWithMetrics = new EnrichCampaignsWithMetrics(campaignsRepo)
   const getDashboardMetrics = new GetDashboardMetrics(campaignsRepo, enrichCampaignsWithMetrics)
 
+  // Optimization + budget sync + ad sets use cases
+  const optimizationConfigRepo = new OptimizationConfigRepository()
+  const optimizationRepo = new OptimizationRepository()
+  const benchmarksRepo = new BenchmarksRepository()
+  const claudeClient = new ClaudeClient()
+  const buildOptimizationInput = new BuildOptimizationInput({
+    metricsHistoryRepo,
+    benchmarksRepo,
+    adAccountsRepo,
+  })
+  const analyzeCampaignOptimization = new AnalyzeCampaignOptimization(
+    campaignsRepo,
+    optimizationRepo,
+    optimizationConfigRepo,
+    buildOptimizationInput,
+    claudeClient
+  )
+  const applyOptimizationRecommendation = new ApplyOptimizationRecommendation(
+    campaignsRepo,
+    adAccountsRepo,
+    optimizationRepo,
+    optimizationConfigRepo
+  )
+  const listOptimizationRuns = new ListOptimizationRuns(campaignsRepo, optimizationRepo)
+  const getLatestRecommendations = new GetLatestRecommendations(
+    campaignsRepo,
+    optimizationRepo
+  )
+  const syncBudgetFromPlatform = new SyncCampaignBudgetFromPlatform(
+    campaignsRepo,
+    adAccountsRepo,
+    optimizationConfigRepo
+  )
+  const listCampaignAdSets = new ListCampaignAdSets(campaignsRepo, adAccountsRepo)
+  const listAdSetAds = new ListAdSetAds(campaignsRepo, adAccountsRepo)
+
   // 📦 Listar campañas (solo lectura, no requiere suscripción)
-  // Enriquecidas automáticamente con métricas del mock API
+  // Enriquecidas automáticamente con métricas
   app.get("/campaigns", async (req, reply) => {
     try {
       const user = await verifyUser(req, reply)
       if (!user) return
-      
-      req.log.info({ userId: user.id }, "Fetching campaigns for user")
-      
-      // Enrich campaigns with metrics from mock API
-      const campaigns = await enrichCampaignsWithMetrics.execute(user.id)
-      
+
+      const { client_id } = req.query as { client_id?: string }
+
+      req.log.info({ userId: user.id, clientId: client_id }, "Fetching campaigns for user")
+
+      // Enrich campaigns with metrics (optionally filtered by client/brand)
+      const campaigns = await enrichCampaignsWithMetrics.execute(user.id, client_id)
+
       req.log.info({ userId: user.id, count: campaigns.length }, "Campaigns fetched successfully")
-      
+
       return reply.send(campaigns)
     } catch (err) {
       req.log.error({ err }, "Error al listar campañas")
@@ -57,7 +109,7 @@ export async function CampaignsController(app: FastifyInstance) {
       // Check subscription
       const { data: profile } = await supabaseAdmin
         .from("profiles")
-        .select("has_active_subscription, plai_user_id")
+        .select("has_active_subscription")
         .eq("id", user.id)
         .maybeSingle()
 
@@ -66,7 +118,6 @@ export async function CampaignsController(app: FastifyInstance) {
       return reply.send({
         can_create: canCreate,
         has_subscription: profile?.has_active_subscription || false,
-        has_plai_account: !!profile?.plai_user_id,
         ad_accounts_count: activeAccounts.length,
         ad_accounts: activeAccounts.map((acc) => ({
           platform: acc.platform,
@@ -75,7 +126,6 @@ export async function CampaignsController(app: FastifyInstance) {
         })),
         missing_requirements: [
           !profile?.has_active_subscription && "Suscripción activa",
-          !profile?.plai_user_id && "Cuenta Plai vinculada",
           activeAccounts.length === 0 && "Cuentas de publicidad conectadas",
         ].filter(Boolean),
         message: canCreate
@@ -89,59 +139,59 @@ export async function CampaignsController(app: FastifyInstance) {
   })
 
   // 🆕 Crear campaña (REQUIERE SUSCRIPCIÓN ACTIVA Y CUENTAS CONECTADAS)
-  app.post("/campaigns", async (req, reply) => {
+  // Rate-limited to 5/min per-IP to prevent accidental floods from the wizard.
+  app.post(
+    "/campaigns",
+    {
+      config: {
+        rateLimit: { max: 5, timeWindow: "1 minute" },
+      },
+    },
+    async (req, reply) => {
     try {
       // Verificar usuario Y suscripción activa
       const user = await verifyUserAndSubscription(req, reply)
       if (!user) return
 
-      // Get plai_user_id from profile
+      // Check subscription
       const { data: profile } = await supabaseAdmin
         .from("profiles")
-        .select("plai_user_id")
+        .select("has_active_subscription")
         .eq("id", user.id)
         .maybeSingle()
 
-      if (!profile?.plai_user_id) {
+      if (!profile?.has_active_subscription) {
         return reply.code(400).send({
-          error: "Cuenta Plai no vinculada",
+          error: "Suscripción no activa",
           message: "Por favor, activa tu suscripción primero",
         })
       }
 
-      const body = req.body as {
-        name: string
-        platforms: ("meta" | "google_ads" | "linkedin")[]
-        description?: string
-        
-        // Budget Options
-        budget_usd?: number // Daily budget
-        lifetime_budget?: number // Alternative: lifetime budget
-        
-        // Campaign Settings (Meta/Facebook Ads realistic parameters)
-        objective?: string // OUTCOME_TRAFFIC, OUTCOME_SALES, OUTCOME_ENGAGEMENT, etc.
-        billing_event?: string // IMPRESSIONS, LINK_CLICKS, etc.
-        bid_strategy?: string // LOWEST_COST_WITHOUT_CAP, COST_CAP, etc.
-        status?: "ACTIVE" | "PAUSED"
-        special_ad_categories?: string[] // HOUSING, EMPLOYMENT, CREDIT
-        
-        // Dates
-        start_date?: string
-        end_date?: string | null
-        
-        // Platform-specific settings
-        meta_settings?: {
-          promoted_object?: any
-          [key: string]: any
-        }
-        
-        // Product pricing (for accurate ROA calculation)
-        product_price?: number // Selling price per product unit
-        product_cost?: number // Production cost per product unit (optional)
+      // Validate the shape with zod (strict types + coerce + refinements).
+      // Budget exclusivity and date coherence are enforced inside the schema.
+      const parseResult = createCampaignSchema.safeParse(req.body)
+      if (!parseResult.success) {
+        const first = parseResult.error.issues[0]
+        return reply.code(400).send({
+          error: "invalid_body",
+          message: first?.message || "Datos de campaña inválidos",
+          field: first?.path?.join(".") || undefined,
+          issues: parseResult.error.issues,
+        })
       }
+      const body = parseResult.data
 
-      if (!body.name || !body.platforms?.length) {
-        return reply.code(400).send({ error: "Faltan campos obligatorios" })
+      // Phase A: LinkedIn and TikTok creation flows are not implemented yet
+      // (Phase D). Fail explicitly so the UI doesn't silently partial-create.
+      const unsupportedForCreation = body.platforms.filter(
+        (p) => p === "linkedin" || p === "tiktok"
+      )
+      if (unsupportedForCreation.length > 0) {
+        return reply.code(400).send({
+          error: "PLATFORM_NOT_SUPPORTED",
+          message: `La creación en ${unsupportedForCreation.join(", ")} aún no está disponible. Por ahora selecciona Meta y/o Google Ads.`,
+          unsupported_platforms: unsupportedForCreation,
+        })
       }
 
       // Check if user has connected accounts for the selected platforms
@@ -156,12 +206,13 @@ export async function CampaignsController(app: FastifyInstance) {
           meta: "Meta (Facebook/Instagram)",
           google_ads: "Google Ads",
           linkedin: "LinkedIn Ads",
+          tiktok: "TikTok Ads",
         }
-        
+
         const missingNames = missingPlatforms.map((p) => platformNames[p] || p)
-        
+
         return reply.code(400).send({
-          error: "MISSING_PLATFORM_ACCOUNTS", // Frontend can check this specific error code
+          error: "MISSING_PLATFORM_ACCOUNTS",
           message: `⚠️ Cuentas de publicidad no conectadas`,
           title: "Cuentas requeridas para esta plataforma",
           details: `Para crear campañas en ${missingNames.join(" o ")}, primero debes conectar tu cuenta de publicidad.`,
@@ -170,68 +221,100 @@ export async function CampaignsController(app: FastifyInstance) {
           action_required: `Conecta tu cuenta de ${missingNames[0]}`,
           help_url: "/subscription/accounts",
           action_button_text: "Conectar cuentas ahora",
-          show_popup: true, // Frontend can use this flag
+          show_popup: true,
         })
       }
 
-      // Check if user has ANY ad accounts at all (for better messaging)
       if (activeAdAccounts.length === 0) {
         return reply.code(400).send({
-          error: "NO_AD_ACCOUNTS", // Frontend can check this specific error code
+          error: "NO_AD_ACCOUNTS",
           message: "⚠️ No tienes cuentas de publicidad conectadas",
           title: "Cuentas de publicidad requeridas",
           details: "Para crear campañas, primero debes conectar al menos una cuenta de publicidad.",
           action_required: "Conecta tus cuentas de publicidad",
           help_url: "/subscription/accounts",
           action_button_text: "Conectar cuentas ahora",
-          show_popup: true, // Frontend can use this flag
-        })
-      }
-
-      // Validate budget (must have daily OR lifetime, not both)
-      if (body.budget_usd && body.lifetime_budget) {
-        return reply.code(400).send({
-          error: "Invalid budget",
-          message: "Provide either budget_usd (daily) OR lifetime_budget, not both",
-        })
-      }
-
-      if (!body.budget_usd && !body.lifetime_budget) {
-        return reply.code(400).send({
-          error: "Budget required",
-          message: "Provide either budget_usd (daily) or lifetime_budget",
+          show_popup: true,
         })
       }
 
       const campaign = await createCampaign.execute({
         userId: user.id,
-        plaiUserId: profile.plai_user_id,
+        clientId: body.client_id,
         name: body.name,
-        platforms: body.platforms,
+        platforms: body.platforms as Platform[],
         description: body.description,
-        
-        // Budget
+
         budgetUsd: body.budget_usd,
         lifetimeBudget: body.lifetime_budget,
-        
-        // Campaign Settings
+        platformBudgets: body.platform_budgets as any,
+
         objective: body.objective,
         billingEvent: body.billing_event,
         bidStrategy: body.bid_strategy,
         status: body.status,
         specialAdCategories: body.special_ad_categories,
-        
-        // Dates
+
         startDate: body.start_date,
         endDate: body.end_date,
-        
-        // Platform-specific
+
         metaSettings: body.meta_settings,
-        
-        // Product pricing
+
+        targeting: body.targeting
+          ? {
+              geoCountries: body.targeting.geo_countries,
+              ageMin: body.targeting.age_min,
+              ageMax: body.targeting.age_max,
+              genders: body.targeting.genders,
+            }
+          : undefined,
+
+        creative: body.creative
+          ? {
+              pageId: body.creative.page_id,
+              mediaUrl: body.creative.media_url,
+              mediaType: body.creative.media_type as "image" | "video" | undefined,
+              mediaFilename: body.creative.media_filename,
+              headline: body.creative.headline,
+              primaryText: body.creative.primary_text,
+              description: body.creative.description,
+              cta: body.creative.cta,
+              link: body.creative.link,
+            }
+          : undefined,
+
         productPrice: body.product_price,
         productCost: body.product_cost,
       })
+
+      // Partial-success handling: if CreateCampaign attached _errors it means
+      // at least one platform failed. Respond with 207 Multi-Status so the
+      // frontend can distinguish "complete success" from "partial success".
+      const errors = (campaign as { _errors?: Record<string, string> })._errors
+      if (errors && Object.keys(errors).length > 0) {
+        const successes = body.platforms.filter((p) => !errors[p])
+        if (successes.length === 0) {
+          // All platforms failed → treat as server-side failure but still
+          // return the local row (it was saved) so the user can retry later.
+          return reply.code(502).send({
+            error: "ALL_PLATFORMS_FAILED",
+            message: "No pudimos publicar la campaña en ninguna plataforma",
+            campaign,
+            failures: Object.entries(errors).map(([platform, message]) => ({
+              platform,
+              message,
+            })),
+          })
+        }
+        return reply.code(207).send({
+          campaign,
+          successes,
+          failures: Object.entries(errors).map(([platform, message]) => ({
+            platform,
+            message,
+          })),
+        })
+      }
 
       return reply.code(201).send(campaign)
     } catch (err: any) {
@@ -239,6 +322,35 @@ export async function CampaignsController(app: FastifyInstance) {
       return reply.code(500).send({
         error: err.message || "Error al crear campaña",
       })
+    }
+    }
+  )
+
+  // 🔍 Lookup internal campaign by platform-native ID (must be before /:id)
+  app.get("/campaigns/by-platform-id", async (req, reply) => {
+    try {
+      const user = await verifyUser(req, reply)
+      if (!user) return
+      const { platform, platformCampaignId } = req.query as {
+        platform?: string
+        platformCampaignId?: string
+      }
+      if (!platform || !platformCampaignId) {
+        return reply.code(400).send({ error: "platform y platformCampaignId son requeridos" })
+      }
+      const campaign = await campaignsRepo.findByPlatformCampaignId(
+        user.id,
+        platform,
+        platformCampaignId
+      )
+      return reply.send({
+        imported: !!campaign,
+        campaign_id: campaign?.id ?? null,
+        campaign_name: campaign?.name ?? null,
+      })
+    } catch (err: any) {
+      req.log.error({ err }, "Error buscando campaña por platform ID")
+      return reply.code(500).send({ error: "Error al buscar campaña" })
     }
   })
 
@@ -288,7 +400,7 @@ export async function CampaignsController(app: FastifyInstance) {
         
         // Check if it's per-platform structure (e.g., {"meta": {...}})
         if (typeof metrics === 'object' && !Array.isArray(metrics)) {
-          const platforms = ['meta', 'google_ads', 'linkedin']
+          const platforms = ['meta', 'google_ads', 'linkedin', 'tiktok']
           const hasPlatformKeys = platforms.some(p => metrics && typeof metrics === 'object' && p in metrics)
           
           if (hasPlatformKeys) {
@@ -299,8 +411,9 @@ export async function CampaignsController(app: FastifyInstance) {
             
             // If platform metrics are already calculated, use them directly
             // Otherwise, calculate from raw data if available
-            if (campaign.raw_data_plai && typeof campaign.raw_data_plai === 'object') {
-              const rawData = campaign.raw_data_plai[firstPlatform] || campaign.raw_data_plai
+            const rawDataField = (campaign as any).raw_data_platform || (campaign as any).raw_data_plai
+            if (rawDataField && typeof rawDataField === 'object') {
+              const rawData = rawDataField[firstPlatform] || rawDataField
               metrics = MetricsCalculator.calculateFromRaw(rawData)
             } else {
               metrics = platformMetrics || metrics
@@ -316,23 +429,35 @@ export async function CampaignsController(app: FastifyInstance) {
         })
       }
 
-      // Otherwise, try to fetch from Plai
-      if (campaign.mock_campaign_id) {
+      // Otherwise, try to calculate from stored raw data
+      const campaignIdField = (campaign as any).platform_campaign_id || (campaign as any).mock_campaign_id
+      if (campaignIdField) {
         try {
-          let plaiCampaignIds: Record<string, string>
-          try {
-            plaiCampaignIds =
-              typeof campaign.mock_campaign_id === "string"
-                ? JSON.parse(campaign.mock_campaign_id)
-                : campaign.mock_campaign_id
-          } catch {
-            // Legacy format - single campaign ID
-            // Calculate from stored RAW data if available, otherwise fetch from Plai
-            if (campaign.raw_data_plai) {
-              const { MetricsCalculator } = await import("@/application/services/MetricsCalculator")
-              const rawData = typeof campaign.raw_data_plai === 'string' 
-                ? JSON.parse(campaign.raw_data_plai) 
-                : campaign.raw_data_plai
+          const rawDataField = (campaign as any).raw_data_platform || (campaign as any).raw_data_plai
+          if (rawDataField) {
+            // Calculate from stored RAW data
+            const { MetricsCalculator } = await import("@/application/services/MetricsCalculator")
+            const rawData = typeof rawDataField === 'string' 
+              ? JSON.parse(rawDataField) 
+              : rawDataField
+            
+            // Check if multi-platform or single
+            if (typeof rawData === 'object' && !Array.isArray(rawData) && Object.keys(rawData).some(k => ['meta', 'google_ads', 'linkedin', 'tiktok'].includes(k))) {
+              // Multi-platform format
+              const allMetrics: Record<string, any> = {}
+              for (const [platform, platformRawData] of Object.entries(rawData)) {
+                allMetrics[platform] = MetricsCalculator.calculateFromRaw(platformRawData as any)
+              }
+              
+              return reply.send({
+                id: campaign.id,
+                name: campaign.name,
+                metrics: allMetrics,
+                synced: true,
+                from_stored: true,
+              })
+            } else {
+              // Single platform or flat structure
               const calculated = MetricsCalculator.calculateFromRaw(rawData)
               return reply.send({
                 id: campaign.id,
@@ -342,52 +467,9 @@ export async function CampaignsController(app: FastifyInstance) {
                 from_stored: true,
               })
             }
-            
-            const overview = await plaiApi.getCampaignOverview(campaign.mock_campaign_id as string)
-            return reply.send({
-              id: campaign.id,
-              name: campaign.name,
-              metrics: overview.metrics,
-              synced: false,
-            })
           }
-
-          // Multi-platform format
-          const allMetrics: Record<string, any> = {}
-          if (campaign.raw_data_plai) {
-            // Calculate from stored RAW data
-            const { MetricsCalculator } = await import("@/application/services/MetricsCalculator")
-            const rawData = typeof campaign.raw_data_plai === 'string' 
-              ? JSON.parse(campaign.raw_data_plai) 
-              : campaign.raw_data_plai
-            
-            for (const [platform, platformRawData] of Object.entries(rawData)) {
-              allMetrics[platform] = MetricsCalculator.calculateFromRaw(platformRawData as any)
-            }
-            
-            return reply.send({
-              id: campaign.id,
-              name: campaign.name,
-              metrics: allMetrics,
-              synced: true,
-              from_stored: true,
-            })
-          }
-          
-          // Fallback: fetch from Plai
-          for (const [platform, campaignId] of Object.entries(plaiCampaignIds)) {
-            const overview = await plaiApi.getCampaignOverview(campaignId as string)
-            allMetrics[platform] = overview.metrics
-          }
-
-          return reply.send({
-            id: campaign.id,
-            name: campaign.name,
-            metrics: allMetrics,
-            synced: false,
-          })
         } catch (err: any) {
-          req.log.error({ err }, "Error fetching metrics from Plai")
+          req.log.error({ err }, "Error calculating metrics from stored data")
         }
       }
 
@@ -403,7 +485,7 @@ export async function CampaignsController(app: FastifyInstance) {
     }
   })
 
-  // 🔄 Sincronizar métricas desde Plai
+  // 🔄 Sincronizar métricas desde plataformas
   app.post("/campaigns/:id/sync", async (req, reply) => {
     try {
       const user = await verifyUserAndSubscription(req, reply)
@@ -440,7 +522,7 @@ export async function CampaignsController(app: FastifyInstance) {
       const { id } = req.params as { id: string }
       const body = req.body as Partial<{
         name: string
-        platforms: ("meta" | "google_ads" | "linkedin")[]
+        platforms: ("meta" | "google_ads" | "linkedin" | "tiktok")[]
         description: string
         budget_usd: number
         status: "active" | "paused" | "completed"
@@ -454,102 +536,11 @@ export async function CampaignsController(app: FastifyInstance) {
         return reply.code(404).send({ error: "Campaña no encontrada" })
       }
 
-      // Get plai_user_id for updates that need Plai sync
-      const { data: profile } = await supabaseAdmin
-        .from("profiles")
-        .select("plai_user_id")
-        .eq("id", user.id)
-        .maybeSingle()
-
       // Update local campaign
       const updated = await campaignsRepo.update(user.id, id, body)
 
-      // If status is being updated and we have Plai campaign IDs, sync to Plai
-      if (body.status && existingCampaign.mock_campaign_id && profile?.plai_user_id) {
-        try {
-          const statusMap: Record<string, "ACTIVE" | "PAUSED" | "ARCHIVED"> = {
-            active: "ACTIVE",
-            paused: "PAUSED",
-            completed: "ARCHIVED",
-          }
-          const plaiStatus = statusMap[body.status] || "PAUSED"
-
-          // Try to parse as JSON (multi-platform format)
-          let plaiCampaignIds: Record<string, string> | null = null
-          try {
-            plaiCampaignIds =
-              typeof existingCampaign.mock_campaign_id === "string"
-                ? JSON.parse(existingCampaign.mock_campaign_id)
-                : existingCampaign.mock_campaign_id
-          } catch {
-            // Legacy format - single campaign ID
-            await plaiApi.updateCampaignStatus(
-              profile.plai_user_id,
-              existingCampaign.mock_campaign_id as string,
-              plaiStatus
-            )
-            return reply.send(updated)
-          }
-
-          // Multi-platform format
-          if (plaiCampaignIds) {
-            for (const [platform, campaignId] of Object.entries(plaiCampaignIds)) {
-              try {
-                await plaiApi.updateCampaignStatus(
-                  profile.plai_user_id,
-                  campaignId as string,
-                  plaiStatus
-                )
-              } catch (err: any) {
-                req.log.error({ err }, `Failed to update status in ${platform}`)
-              }
-            }
-          }
-        } catch (err: any) {
-          req.log.error({ err }, "Error syncing status to Plai")
-          // Continue - local update succeeded
-        }
-      }
-
-      // If budget is being updated, sync to Plai
-      if (body.budget_usd !== undefined && existingCampaign.mock_campaign_id && profile?.plai_user_id) {
-        try {
-          // Try to parse as JSON (multi-platform format)
-          let plaiCampaignIds: Record<string, string> | null = null
-          try {
-            plaiCampaignIds =
-              typeof existingCampaign.mock_campaign_id === "string"
-                ? JSON.parse(existingCampaign.mock_campaign_id)
-                : existingCampaign.mock_campaign_id
-          } catch {
-            // Legacy format - single campaign ID
-            await plaiApi.updateCampaignBudget(
-              profile.plai_user_id,
-              existingCampaign.mock_campaign_id as string,
-              body.budget_usd
-            )
-            return reply.send(updated)
-          }
-
-          // Multi-platform format
-          if (plaiCampaignIds) {
-            for (const [platform, campaignId] of Object.entries(plaiCampaignIds)) {
-              try {
-                await plaiApi.updateCampaignBudget(
-                  profile.plai_user_id,
-                  campaignId as string,
-                  body.budget_usd
-                )
-              } catch (err: any) {
-                req.log.error({ err }, `Failed to update budget in ${platform}`)
-              }
-            }
-          }
-        } catch (err: any) {
-          req.log.error({ err }, "Error syncing budget to Plai")
-          // Continue - local update succeeded
-        }
-      }
+      // TODO: Sync status/budget updates to platform APIs if needed
+      // For now, we only update locally. Platform sync can be added later
 
       return reply.send(updated)
     } catch (err) {
@@ -600,17 +591,117 @@ export async function CampaignsController(app: FastifyInstance) {
   })
 
   // 📈 Obtener métricas del dashboard (solo lectura, no requiere suscripción)
+  // Consolidates metrics from all platforms
   app.get("/dashboard/metrics", async (req, reply) => {
     try {
       const user = await verifyUser(req, reply)
       if (!user) return
 
-      const metrics = await getDashboardMetrics.execute(user.id)
+      const { client_id } = req.query as { client_id?: string }
+
+      // Enrich campaigns before passing them to GetDashboardMetrics (optionally by client)
+      const enrichedCampaigns = await enrichCampaignsWithMetrics.execute(user.id, client_id)
+      const metrics = await getDashboardMetrics.execute(user.id, enrichedCampaigns, client_id)
       return reply.send(metrics)
     } catch (err: any) {
       req.log.error(err)
       return reply.code(500).send({
         error: err.message || "Error al obtener métricas del dashboard",
+      })
+    }
+  })
+
+  // 📊 Obtener resumen de plataformas del dashboard
+  app.get("/dashboard/platform-summary", async (req, reply) => {
+    try {
+      const user = await verifyUser(req, reply)
+      if (!user) return
+
+      const { client_id } = req.query as { client_id?: string }
+
+      // Use the platforms summary endpoint logic
+      const platforms: Platform[] = ["meta", "google_ads", "linkedin", "tiktok"]
+      const campaigns = await enrichCampaignsWithMetrics.execute(user.id, client_id)
+      const adAccountsRepo = new SupabaseAdAccountsRepository()
+      const adAccounts = client_id
+        ? await adAccountsRepo.findByUserAndClient(user.id, client_id)
+        : await adAccountsRepo.findByUserId(user.id)
+
+      // Group ad accounts by platform
+      const accountsByPlatform = new Map<Platform, number>()
+      adAccounts.forEach((acc) => {
+        accountsByPlatform.set(acc.platform, (accountsByPlatform.get(acc.platform) || 0) + 1)
+      })
+
+      // Calculate metrics per platform
+      const platformSummaries = await Promise.all(
+        platforms.map(async (platform) => {
+          const platformCampaigns = campaigns.filter((c) =>
+            Array.isArray(c.platforms)
+              ? c.platforms.includes(platform)
+              : c.platforms === platform
+          )
+
+          let totalImpressions = 0
+          let totalClicks = 0
+          let totalConversions = 0
+          let totalRevenue = 0
+          let totalSpend = 0
+
+          platformCampaigns.forEach((campaign) => {
+            totalSpend += campaign.spend_usd || 0
+
+            if (campaign.mock_stats) {
+              const stats = campaign.mock_stats as any
+              if (typeof stats === "object" && !Array.isArray(stats) && platform in stats) {
+                const platformStats = stats[platform]
+                if (platformStats && typeof platformStats === "object") {
+                  totalImpressions += platformStats.impressions || 0
+                  totalClicks += platformStats.clicks || 0
+                  totalConversions += platformStats.conversions || 0
+                  totalRevenue += platformStats.revenue || 0
+                }
+              } else if (typeof stats === "object" && !Array.isArray(stats)) {
+                // Flat structure - include if campaign has this platform
+                totalImpressions += stats.impressions || 0
+                totalClicks += stats.clicks || 0
+                totalConversions += stats.conversions || 0
+                totalRevenue += stats.revenue || 0
+              }
+            }
+          })
+
+          const roa = totalSpend > 0 ? totalRevenue / totalSpend : undefined
+          const ctr = totalImpressions > 0 ? (totalClicks / totalImpressions) * 100 : 0
+
+          return {
+            platform,
+            connected_accounts: accountsByPlatform.get(platform) || 0,
+            total_campaigns: platformCampaigns.length,
+            active_campaigns: platformCampaigns.filter((c) => c.status === "active").length,
+            metrics: {
+              impressions: totalImpressions,
+              clicks: totalClicks,
+              conversions: totalConversions,
+              revenue: totalRevenue,
+              spend: totalSpend,
+              roa,
+              ctr,
+            },
+            is_connected: (accountsByPlatform.get(platform) || 0) > 0,
+          }
+        })
+      )
+
+      return reply.send({
+        platforms: platformSummaries,
+        total_platforms_connected: platformSummaries.filter((p) => p.is_connected).length,
+        total_campaigns_across_platforms: campaigns.length,
+      })
+    } catch (err: any) {
+      req.log.error(err)
+      return reply.code(500).send({
+        error: err.message || "Error al obtener resumen de plataformas del dashboard",
       })
     }
   })
@@ -684,14 +775,16 @@ export async function CampaignsController(app: FastifyInstance) {
       const user = await verifyUser(req, reply)
       if (!user) return
 
-      const { 
+      const {
         days = "30",
         campaign_ids,
-        platforms 
-      } = req.query as { 
+        platforms,
+        client_id,
+      } = req.query as {
         days?: string
         campaign_ids?: string // Comma-separated campaign IDs
-        platforms?: string // Comma-separated platforms (meta,google_ads,linkedin)
+        platforms?: string    // Comma-separated platforms (meta,google_ads,linkedin,tiktok)
+        client_id?: string
       }
 
       // Calculate date range
@@ -700,8 +793,10 @@ export async function CampaignsController(app: FastifyInstance) {
       startDate.setDate(startDate.getDate() - daysBack)
       startDate.setHours(0, 0, 0, 0)
 
-      // Get all campaigns for the user
-      let campaigns = await campaignsRepo.listByUser(user.id)
+      // Get campaigns for user, optionally filtered by client/brand
+      let campaigns = client_id
+        ? await campaignsRepo.listByUserAndClient(user.id, client_id)
+        : await campaignsRepo.listByUser(user.id)
       
       // Filter by campaign IDs if provided
       if (campaign_ids) {
@@ -787,6 +882,180 @@ export async function CampaignsController(app: FastifyInstance) {
       req.log.error(err)
       return reply.code(500).send({
         error: err.message || "Error al obtener historial de ventas",
+      })
+    }
+  })
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // AI OPTIMIZATION (Claude) — analyze, apply, runs, latest recommendations
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  app.post("/campaigns/:id/optimize/analyze", async (req, reply) => {
+    try {
+      const user = await verifyUserAndSubscription(req, reply)
+      if (!user) return
+      const { id } = req.params as { id: string }
+
+      const result = await analyzeCampaignOptimization.execute(user.id, id)
+      return reply.send(result)
+    } catch (err: any) {
+      const status = err.message === "Campaign not found" ? 404
+        : err.message?.includes("rate_limit") ? 429
+        : 500
+      req.log.error({ err, campaignId: (req.params as any).id }, "optimize/analyze failed")
+      return reply.code(status).send({
+        error: err.message || "Error al analizar campaña con IA",
+      })
+    }
+  })
+
+  app.post("/campaigns/:id/optimize/apply", async (req, reply) => {
+    try {
+      const user = await verifyUserAndSubscription(req, reply)
+      if (!user) return
+      const { id } = req.params as { id: string }
+      const body = req.body as {
+        recommendation_id: string
+        decision: "accept" | "reject"
+        override_params?: Record<string, unknown>
+        notes?: string
+      }
+
+      if (!body?.recommendation_id || !body?.decision) {
+        return reply.code(400).send({
+          error: "recommendation_id y decision son requeridos",
+        })
+      }
+      if (body.decision !== "accept" && body.decision !== "reject") {
+        return reply.code(400).send({ error: "decision debe ser 'accept' o 'reject'" })
+      }
+
+      const result = await applyOptimizationRecommendation.execute({
+        userId: user.id,
+        campaignId: id,
+        recommendationId: body.recommendation_id,
+        decision: body.decision,
+        overrideParams: body.override_params,
+        notes: body.notes,
+      })
+      return reply.send(result)
+    } catch (err: any) {
+      const status = err.message === "Campaign not found" ? 404 : 500
+      req.log.error({ err, campaignId: (req.params as any).id }, "optimize/apply failed")
+      return reply.code(status).send({
+        error: err.message || "Error al aplicar recomendación",
+      })
+    }
+  })
+
+  app.get("/campaigns/:id/optimize/runs", async (req, reply) => {
+    try {
+      const user = await verifyUser(req, reply)
+      if (!user) return
+      const { id } = req.params as { id: string }
+      const { limit } = req.query as { limit?: string }
+      const parsed = limit ? Math.min(50, Math.max(1, parseInt(limit, 10) || 20)) : 20
+
+      const runs = await listOptimizationRuns.execute(user.id, id, parsed)
+      return reply.send({ runs })
+    } catch (err: any) {
+      const status = err.message === "Campaign not found" ? 404 : 500
+      req.log.error({ err, campaignId: (req.params as any).id }, "optimize/runs failed")
+      return reply.code(status).send({
+        error: err.message || "Error al obtener historial de optimizaciones",
+      })
+    }
+  })
+
+  app.get("/campaigns/:id/optimize/recommendations/latest", async (req, reply) => {
+    try {
+      const user = await verifyUser(req, reply)
+      if (!user) return
+      const { id } = req.params as { id: string }
+      const result = await getLatestRecommendations.execute(user.id, id)
+      return reply.send(result)
+    } catch (err: any) {
+      const status = err.message === "Campaign not found" ? 404 : 500
+      req.log.error({ err, campaignId: (req.params as any).id }, "optimize/recommendations/latest failed")
+      return reply.code(status).send({
+        error: err.message || "Error al obtener recomendaciones",
+      })
+    }
+  })
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // BUDGET SYNC — platform as source of truth
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  app.post("/campaigns/:id/budget/sync-from-platform", async (req, reply) => {
+    try {
+      const user = await verifyUserAndSubscription(req, reply)
+      if (!user) return
+      const { id } = req.params as { id: string }
+      const body = (req.body ?? {}) as { promote?: boolean }
+
+      const result = await syncBudgetFromPlatform.execute(user.id, id, {
+        promoteToSourceOfTruth: !!body.promote,
+      })
+      return reply.send(result)
+    } catch (err: any) {
+      req.log.error({ err }, "Error syncing campaign budget from platform")
+      return reply.code(500).send({
+        error: err.message || "Error al sincronizar presupuesto",
+      })
+    }
+  })
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // AD SETS / AD GROUPS — hierarchical creatives view
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  app.get("/campaigns/:id/adsets", async (req, reply) => {
+    try {
+      const user = await verifyUser(req, reply)
+      if (!user) return
+      const { id } = req.params as { id: string }
+      const { since, until, clientId, platform } = req.query as {
+        since?: string
+        until?: string
+        clientId?: string
+        platform?: string
+      }
+      const dateRange = since && until ? { since, until } : undefined
+
+      const result = await listCampaignAdSets.execute(user.id, id, {
+        dateRange,
+        clientId,
+        platform: platform as any,
+      })
+      return reply.send(result)
+    } catch (err: any) {
+      req.log.error({ err }, "Error listing campaign ad sets")
+      return reply.code(500).send({
+        error: err.message || "Error al obtener ad sets de la campaña",
+      })
+    }
+  })
+
+  app.get("/campaigns/:id/adsets/:adsetId/ads", async (req, reply) => {
+    try {
+      const user = await verifyUser(req, reply)
+      if (!user) return
+      const { id, adsetId } = req.params as { id: string; adsetId: string }
+      const { clientId, platform } = req.query as {
+        clientId?: string
+        platform?: string
+      }
+
+      const result = await listAdSetAds.execute(user.id, id, adsetId, {
+        clientId,
+        platform: platform as any,
+      })
+      return reply.send(result)
+    } catch (err: any) {
+      req.log.error({ err }, "Error listing ads for ad set")
+      return reply.code(500).send({
+        error: err.message || "Error al obtener anuncios del ad set",
       })
     }
   })

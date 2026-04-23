@@ -1,7 +1,8 @@
-import { PlatformApiClientFactory } from "@/infrastructure/services/platforms/PlatformApiClientFactory"
-import { TokenManager } from "@/infrastructure/services/TokenManager"
+import { PlatformApiClientFactory } from "@/infrastructure/integrations/platforms/PlatformApiClientFactory"
+import { TokenManager } from "@/infrastructure/integrations/TokenManager"
 import { AuditLogger } from "@/infrastructure/security/AuditLogger"
 import type { AdAccountsRepository, AdAccount, Platform } from "@/domain/repositories/AdAccountsRepository"
+import { isReconnectRequired } from "@/infrastructure/integrations/platforms/OAuthErrorDetector"
 
 export class SyncConnectedAccounts {
   constructor(
@@ -24,6 +25,9 @@ export class SyncConnectedAccounts {
 
     const syncedAccounts: AdAccount[] = []
     for (const [platform, platformAccounts] of accountsByPlatform.entries()) {
+      if (platform === "tiktok") {
+        continue
+      }
       try {
         const client = PlatformApiClientFactory.createClient(platform)
         for (const account of platformAccounts) {
@@ -47,7 +51,10 @@ export class SyncConnectedAccounts {
               }
             }
             await this.auditLogger.logPlatformApiCall(platform, "getAdAccounts", true, userId, account.id)
+            await this.adAccountsRepo.markConnectionStatus(account.user_id, account.id, "connected").catch(() => {})
           } catch (error: unknown) {
+            const connStatus = isReconnectRequired(error) ? "reconnect_required" : "error"
+            await this.adAccountsRepo.markConnectionStatus(account.user_id, account.id, connStatus).catch(() => {})
             await this.auditLogger.logPlatformApiCall(
               platform,
               "getAdAccounts",

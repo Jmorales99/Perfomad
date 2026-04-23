@@ -9,11 +9,13 @@ export interface CampaignImage {
 export interface Campaign {
   id: string
   user_id: string
-  platforms: ("meta" | "google_ads" | "linkedin")[]
+  client_id?: string | null
+  platforms: ("meta" | "google_ads" | "linkedin" | "tiktok")[]
   name: string
   description?: string
   budget_usd: number
   lifetime_budget?: number // Alternative to daily budget
+  platform_budgets?: Record<string, { budget_type: "daily" | "lifetime"; amount: number }> | null
   spend_usd: number
   status: "active" | "paused" | "completed"
   start_date: string
@@ -68,7 +70,7 @@ export interface Campaign {
 }
 
 export class SupabaseCampaignsRepository {
-  // ✅ Listar campañas
+  // ✅ Listar campañas (todas las del usuario, sin filtrar por cliente)
   async listByUser(userId: string): Promise<Campaign[]> {
     const { data, error } = await supabaseAdmin
       .from("campaigns")
@@ -78,6 +80,53 @@ export class SupabaseCampaignsRepository {
 
     if (error) {
       console.error("Error fetching campaigns:", error)
+      throw error
+    }
+
+    const campaigns = (data || []) as Campaign[]
+
+    for (const c of campaigns) {
+      const { data: imgs } = await supabaseAdmin
+        .from("campaign_images")
+        .select("id, file_path")
+        .eq("campaign_id", c.id)
+        .limit(6)
+
+      if (!imgs?.length) {
+        c.images = []
+        continue
+      }
+
+      const signed = await Promise.all(
+        imgs.map(async (img) => {
+          const { data: signedUrl } = await supabaseAdmin.storage
+            .from("campaign-images")
+            .createSignedUrl(img.file_path, 60 * 60)
+          return {
+            id: img.id,
+            path: img.file_path,
+            signed_url: signedUrl?.signedUrl,
+          }
+        })
+      )
+
+      c.images = signed
+    }
+
+    return campaigns
+  }
+
+  // ✅ Listar campañas filtradas por cliente (brand)
+  async listByUserAndClient(userId: string, clientId: string): Promise<Campaign[]> {
+    const { data, error } = await supabaseAdmin
+      .from("campaigns")
+      .select("*")
+      .eq("user_id", userId)
+      .eq("client_id", clientId)
+      .order("created_at", { ascending: false })
+
+    if (error) {
+      console.error("Error fetching campaigns by client:", error)
       throw error
     }
 
@@ -135,11 +184,13 @@ export class SupabaseCampaignsRepository {
       .from("campaigns")
       .insert({
         user_id: campaign.user_id,
+        client_id: campaign.client_id ?? null,
         name: campaign.name,
         platforms: campaign.platforms,
         description: campaign.description || "",
         budget_usd: campaign.budget_usd ?? 0,
         lifetime_budget: campaign.lifetime_budget ?? null,
+        platform_budgets: campaign.platform_budgets ?? null,
         spend_usd: 0,
         status: campaign.status ?? "active",
         start_date: campaign.start_date ?? new Date().toISOString(),
@@ -235,5 +286,87 @@ export class SupabaseCampaignsRepository {
 
     if (error) throw error
     return data as Campaign | null
+  }
+
+  /**
+   * Find a campaign by its platform-native ID within the user's scope.
+   * Used by ImportPlatformCampaign to ensure idempotency — if the same
+   * platform campaign was already imported before, we reuse the row.
+   *
+   * `platform_campaign_id` is a JSONB column shaped as `{ [platform]: id }`.
+   * Requires the GIN index from migration 010 for performance.
+   */
+  async findByPlatformCampaignId(
+    userId: string,
+    platform: string,
+    platformCampaignId: string
+  ): Promise<Campaign | null> {
+    const { data, error } = await supabaseAdmin
+      .from("campaigns")
+      .select("*")
+      .eq("user_id", userId)
+      .filter("platform_campaign_id->>" + platform, "eq", platformCampaignId)
+      .limit(1)
+      .maybeSingle()
+
+    if (error) throw error
+    return data as Campaign | null
+  }
+
+  /**
+   * Inserts a campaign row representing an already-existing platform campaign
+   * (not created via Perfomad). Marks `source = 'imported'` and sets
+   * `platform_campaign_id` directly (CreateCampaign uses `.update` after
+   * provisioning; imports already have the id).
+   */
+  async createImported(params: {
+    userId: string
+    clientId: string | null
+    platform: "meta" | "google_ads" | "linkedin" | "tiktok"
+    platformCampaignId: string
+    name: string
+    objective?: string | null
+    status?: Campaign["status"]
+    budget_usd?: number | null
+    lifetime_budget?: number | null
+    /** Actual campaign start date fetched from the platform (ISO 8601). Falls back to now if omitted. */
+    start_date?: string | null
+  }): Promise<Campaign> {
+    const { data: lastCampaign, error: fetchError } = await supabaseAdmin
+      .from("campaigns")
+      .select("number")
+      .eq("user_id", params.userId)
+      .order("number", { ascending: false })
+      .limit(1)
+      .single()
+
+    if (fetchError && fetchError.code !== "PGRST116") throw fetchError
+    const nextNumber = (lastCampaign?.number ?? 0) + 1
+
+    const { data, error } = await supabaseAdmin
+      .from("campaigns")
+      .insert({
+        user_id: params.userId,
+        client_id: params.clientId,
+        name: params.name,
+        platforms: [params.platform],
+        platform_campaign_id: { [params.platform]: params.platformCampaignId },
+        source: "imported",
+        description: "",
+        budget_usd: params.budget_usd ?? 0,
+        lifetime_budget: params.lifetime_budget ?? null,
+        spend_usd: 0,
+        status: params.status ?? "active",
+        start_date: params.start_date ?? new Date().toISOString(),
+        end_date: null,
+        number: nextNumber,
+        objective: params.objective ?? null,
+        sync_status: "pending",
+      } as any)
+      .select()
+      .maybeSingle()
+
+    if (error) throw error
+    return data as Campaign
   }
 }

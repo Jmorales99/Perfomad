@@ -72,16 +72,21 @@ export class SupabaseAdAccountsRepository implements AdAccountsRepository {
   async findByUserClientAndPlatform(
     userId: string,
     clientId: string,
-    platform: Platform
+    platform: Platform,
+    options?: { includeInactive?: boolean }
   ): Promise<AdAccount | null> {
-    const { data, error } = await supabaseAdmin
+    let q = supabaseAdmin
       .from("ad_accounts")
       .select("*")
       .eq("user_id", userId)
       .eq("client_id", clientId)
       .eq("platform", platform)
-      .eq("is_active", true)
-      .maybeSingle()
+
+    if (!options?.includeInactive) {
+      q = q.eq("is_active", true)
+    }
+
+    const { data, error } = await q.order("connected_at", { ascending: false }).limit(1).maybeSingle()
 
     if (error && error.code !== "PGRST116") throw error
     return data as AdAccount | null
@@ -113,6 +118,20 @@ export class SupabaseAdAccountsRepository implements AdAccountsRepository {
 
     if (error) throw error
     return data as AdAccount
+  }
+
+  async markConnectionStatus(
+    userId: string,
+    adAccountId: string,
+    status: "connected" | "reconnect_required" | "error"
+  ): Promise<void> {
+    const { error } = await supabaseAdmin
+      .from("ad_accounts")
+      .update({ connection_status: status })
+      .eq("id", adAccountId)
+      .eq("user_id", userId)
+
+    if (error) throw error
   }
 
   async delete(userId: string, id: string): Promise<void> {

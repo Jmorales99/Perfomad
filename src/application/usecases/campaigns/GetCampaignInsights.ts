@@ -1,14 +1,25 @@
 import { SupabaseCampaignsRepository } from "@/infrastructure/repositories/SupabaseCampaignsRepository"
 import { CampaignMetricsHistoryRepository } from "@/infrastructure/repositories/CampaignMetricsHistoryRepository"
-import { PlaiApiClient } from "@/infrastructure/services/PlaiApiClient"
+import { PlatformApiClientFactory } from "@/infrastructure/integrations/platforms/PlatformApiClientFactory"
+import { TokenManager } from "@/infrastructure/integrations/TokenManager"
+import { AuditLogger } from "@/infrastructure/security/AuditLogger"
 import { MetricsCalculator } from "@/application/services/MetricsCalculator"
+import { SupabaseAdAccountsRepository } from "@/infrastructure/repositories/SupabaseAdAccountsRepository"
+import type { Platform } from "@/infrastructure/repositories/SupabaseAdAccountsRepository"
 
 export class GetCampaignInsights {
+  private tokenManager: TokenManager
+  private auditLogger: AuditLogger
+  private adAccountsRepo: SupabaseAdAccountsRepository
+
   constructor(
     private campaignsRepo: SupabaseCampaignsRepository,
-    private metricsHistoryRepo: CampaignMetricsHistoryRepository,
-    private plaiApi: PlaiApiClient
-  ) {}
+    private metricsHistoryRepo: CampaignMetricsHistoryRepository
+  ) {
+    this.tokenManager = new TokenManager()
+    this.auditLogger = new AuditLogger()
+    this.adAccountsRepo = new SupabaseAdAccountsRepository()
+  }
 
   async execute(userId: string, campaignId: string, useStoredData: boolean = true) {
     // 1. Get campaign from database
@@ -23,22 +34,16 @@ export class GetCampaignInsights {
     // 2. Try to use stored insights first (if enabled and available)
     if (useStoredData) {
       const storedInsights = await this.metricsHistoryRepo.getInsights(campaignId)
-      
+
       if (storedInsights && !storedInsights.is_stale) {
-        // Check if insights are fresh (less than 24 hours old)
         const isStale = await this.metricsHistoryRepo.areInsightsStale(campaignId, 24)
-        
+
         if (!isStale) {
-          // Ensure insights_data is not null or empty - if it is, regenerate it
-          const insights = (storedInsights.insights_data && Object.keys(storedInsights.insights_data).length > 0) 
-            ? storedInsights.insights_data 
-            : this.generateInsightsData(campaign)
-          
           return {
             campaign_id: campaign.id,
             campaign_name: campaign.name,
-            insights: insights,
-            recommendations: storedInsights.recommendations || this.generateMockRecommendations(campaign),
+            insights: storedInsights.insights_data || null,
+            recommendations: storedInsights.recommendations || [],
             data_source: storedInsights.data_source,
             from_cache: true,
           }
@@ -46,52 +51,64 @@ export class GetCampaignInsights {
       }
     }
 
-    // 3. If no stored insights or stale, fetch from Plai
-    if (campaign.mock_campaign_id) {
+    // 3. If no stored insights or stale, fetch from platform APIs
+    const campaignIdField = (campaign as any).platform_campaign_id || (campaign as any).mock_campaign_id
+    
+    if (campaignIdField) {
       try {
-        // Parse Plai campaign IDs (stored as JSON)
-        let plaiCampaignIds: Record<string, string>
+        // Parse platform campaign IDs (stored as JSON)
+        let platformCampaignIds: Record<string, string>
         try {
-          plaiCampaignIds =
-            typeof campaign.mock_campaign_id === "string"
-              ? JSON.parse(campaign.mock_campaign_id)
-              : campaign.mock_campaign_id
+          platformCampaignIds =
+            typeof campaignIdField === "string"
+              ? JSON.parse(campaignIdField)
+              : campaignIdField
         } catch {
-          // Legacy format - single campaign ID
-          const insights = await this.plaiApi.getCampaignInsights({
-            userId,
-            campaignId: campaign.mock_campaign_id as string,
-          })
-          
-          const recommendations = this.generateRecommendations(campaign, insights)
-          
-          // Store insights for future use
-          await this.metricsHistoryRepo.storeInsights({
-            campaign_id: campaignId,
-            insights_data: insights,
-            recommendations,
-            data_source: "plai_api",
-            is_stale: false,
-          })
-          
-          return {
-            campaign_id: campaign.id,
-            campaign_name: campaign.name,
-            insights,
-            recommendations,
-            data_source: "plai_api",
-            from_cache: false,
-          }
+          throw new Error("Invalid platform campaign IDs format")
         }
 
-        // Multi-platform format - get insights for first platform (or aggregate)
-        const firstPlatform = Object.keys(plaiCampaignIds)[0]
-        const firstCampaignId = plaiCampaignIds[firstPlatform]
+        // Get user's ad accounts for token access
+        const adAccounts = await this.adAccountsRepo.findByUserId(userId)
+        const adAccountsByPlatform = new Map<Platform, typeof adAccounts[0]>()
+        for (const account of adAccounts) {
+          adAccountsByPlatform.set(account.platform, account)
+        }
 
-        const insights = await this.plaiApi.getCampaignInsights({
-          userId,
-          campaignId: firstCampaignId,
-        })
+        // Get insights from first platform (or could aggregate)
+        const firstPlatform = Object.keys(platformCampaignIds)[0] as Platform
+        const firstCampaignId = platformCampaignIds[firstPlatform]
+
+        // Get ad account for this platform
+        const adAccount = adAccountsByPlatform.get(firstPlatform)
+        if (!adAccount) {
+          throw new Error(`No ad account found for platform ${firstPlatform}`)
+        }
+
+        // Get platform client
+        const client = PlatformApiClientFactory.createClient(firstPlatform)
+
+        // Get valid access token
+        const accessToken = await this.tokenManager.getValidAccessToken(
+          adAccount as any,
+          async (refreshToken: string) => {
+            return await client.refreshAccessToken(refreshToken)
+          }
+        )
+
+        // Fetch insights from platform API
+        const platformInsights = await client.getCampaignInsights(
+          firstCampaignId,
+          accessToken,
+          undefined, // dateRange - could be passed as parameter
+          { platformAccountId: adAccount.platform_account_id }
+        )
+
+        // Format insights data
+        const insights = {
+          platform: firstPlatform,
+          insights: platformInsights.insights || [],
+          raw: platformInsights.raw || platformInsights,
+        }
 
         const recommendations = this.generateRecommendations(campaign, insights)
         
@@ -100,109 +117,75 @@ export class GetCampaignInsights {
           campaign_id: campaignId,
           insights_data: insights,
           recommendations,
-          data_source: "plai_api",
+          data_source: "platform_api",
           is_stale: false,
         })
+
+        // Log successful fetch
+        await this.auditLogger.logPlatformApiCall(
+          firstPlatform,
+          "getCampaignInsights",
+          true,
+          userId,
+          adAccount.id
+        )
 
         return {
           campaign_id: campaign.id,
           campaign_name: campaign.name,
           insights,
           recommendations,
-          data_source: "plai_api",
+          data_source: "platform_api",
           from_cache: false,
         }
       } catch (error: any) {
-        // If Plai API fails, try to use stored insights even if stale
+        // Platform API failed — fall back to stale cached insights if available
         const storedInsights = await this.metricsHistoryRepo.getInsights(campaignId)
         if (storedInsights) {
-          // Ensure insights_data is not null or empty - if it is, regenerate it
-          const insights = (storedInsights.insights_data && Object.keys(storedInsights.insights_data).length > 0) 
-            ? storedInsights.insights_data 
-            : this.generateInsightsData(campaign)
-          
           return {
             campaign_id: campaign.id,
             campaign_name: campaign.name,
-            insights: insights,
-            recommendations: storedInsights.recommendations || this.generateMockRecommendations(campaign),
+            insights: storedInsights.insights_data || null,
+            recommendations: storedInsights.recommendations || [],
             data_source: storedInsights.data_source,
             from_cache: true,
-            note: "Using cached data - Plai API unavailable",
+            note: "Using cached data - Platform API unavailable",
           }
         }
-        
-        // Fallback to mock recommendations based on local data
-        const mockRecommendations = this.generateMockRecommendations(campaign)
-        
-        // Generate insights data from campaign's stored metrics
-        const insightsData = this.generateInsightsData(campaign)
-        
-        // Store calculated insights for offline access (wrap in try-catch so it doesn't fail the whole request)
-        try {
-          await this.metricsHistoryRepo.storeInsights({
-            campaign_id: campaignId,
-            insights_data: insightsData, // Include actual metrics data
-            recommendations: mockRecommendations,
-            data_source: "calculated",
-            is_stale: true,
-          })
-        } catch (storeError) {
-          console.error("Error storing insights:", storeError)
-          // Continue - return insights even if storage failed
-        }
-        
+
         return {
           campaign_id: campaign.id,
           campaign_name: campaign.name,
-          insights: insightsData, // Return the generated insights data
-          recommendations: mockRecommendations,
-          data_source: "calculated",
+          insights: null,
+          recommendations: [],
+          data_source: "no_data",
           from_cache: false,
-          note: "Generated from local data - Plai API unavailable",
+          note: "No hay datos disponibles. La API de la plataforma no responde y no hay datos en caché.",
         }
       }
     }
 
-    // 4. If no Plai campaign ID, use stored insights or generate mock recommendations
+    // 4. No platform campaign ID — return stored insights or no_data
     const storedInsights = await this.metricsHistoryRepo.getInsights(campaignId)
     if (storedInsights) {
-      // Ensure insights_data is not null or empty - if it is, regenerate it
-      const insights = (storedInsights.insights_data && Object.keys(storedInsights.insights_data).length > 0) 
-        ? storedInsights.insights_data 
-        : this.generateInsightsData(campaign)
-      
       return {
         campaign_id: campaign.id,
         campaign_name: campaign.name,
-        insights: insights,
-        recommendations: storedInsights.recommendations || this.generateMockRecommendations(campaign),
+        insights: storedInsights.insights_data || null,
+        recommendations: storedInsights.recommendations || [],
         data_source: storedInsights.data_source,
         from_cache: true,
       }
     }
-    
-    const mockRecommendations = this.generateMockRecommendations(campaign)
-    
-    // Generate insights data from campaign's stored metrics
-    const insightsData = this.generateInsightsData(campaign)
-    
-    // Store calculated insights
-    await this.metricsHistoryRepo.storeInsights({
-      campaign_id: campaignId,
-      insights_data: insightsData, // Include actual metrics data
-      recommendations: mockRecommendations,
-      data_source: "calculated",
-      is_stale: false,
-    })
-    
+
     return {
       campaign_id: campaign.id,
       campaign_name: campaign.name,
-      insights: insightsData, // Return the generated insights data
-      recommendations: mockRecommendations,
-      data_source: "calculated",
+      insights: null,
+      recommendations: [],
+      data_source: "no_data",
       from_cache: false,
+      note: "No hay datos disponibles. Sincroniza la campaña para obtener métricas.",
     }
   }
 
@@ -212,12 +195,13 @@ export class GetCampaignInsights {
     // Try to get calculated metrics from stored raw data first
     let calculatedMetrics: any = null
     
-    // Option 1: Calculate from stored raw_data_plai if available
-    if (campaign.raw_data_plai) {
+    // Option 1: Calculate from stored raw_data_platform (or raw_data_plai for backward compatibility)
+    const rawDataField = (campaign as any).raw_data_platform || (campaign as any).raw_data_plai
+    if (rawDataField) {
       try {
-        const rawData = typeof campaign.raw_data_plai === 'string' 
-          ? JSON.parse(campaign.raw_data_plai) 
-          : campaign.raw_data_plai
+        const rawData = typeof rawDataField === 'string' 
+          ? JSON.parse(rawDataField) 
+          : rawDataField
         
         // If multi-platform, aggregate or use first platform
         if (typeof rawData === 'object' && !Array.isArray(rawData)) {
@@ -227,7 +211,7 @@ export class GetCampaignInsights {
           calculatedMetrics = MetricsCalculator.calculateFromRaw(rawData)
         }
       } catch (error) {
-        console.error("Error calculating from raw_data_plai:", error)
+        console.error("Error calculating from raw_data_platform:", error)
       }
     }
     
@@ -417,261 +401,5 @@ export class GetCampaignInsights {
     return recommendations
   }
 
-  private generateMockRecommendations(campaign: any): any[] {
-    const recommendations: any[] = []
-
-    // Generate mock metrics based on campaign ID for analysis
-    const mockStats = this.generateMockStats(campaign.id, campaign)
-    const ctr = mockStats.ctr
-    const cpc = mockStats.cost_per_click
-    const spend = campaign.spend_usd || mockStats.spend
-    const budget = campaign.budget_usd || 1000
-
-    // Analyze mock metrics and generate recommendations
-    if (ctr < 0.02) {
-      recommendations.push({
-        type: "ctr_low",
-        priority: "high",
-        title: "CTR bajo detectado",
-        description: `Tu CTR actual es ${(ctr * 100).toFixed(2)}%, por debajo del promedio de la industria. Considera mejorar tus creatividades o ajustar tu targeting.`,
-        action: "Mejorar creatividades y ajustar targeting",
-        impact: "Alto impacto en el rendimiento",
-        estimatedImprovement: "Aumentar CTR podría mejorar el ROI en un 15-25%",
-      })
-    }
-
-    if (cpc > 2) {
-      recommendations.push({
-        type: "cpc_high",
-        priority: "medium",
-        title: "Costo por clic elevado",
-        description: `Tu CPC es $${cpc.toFixed(2)}. Considera optimizar tus pujas o mejorar la relevancia de tus anuncios.`,
-        action: "Optimizar pujas",
-        impact: "Impacto medio en costos",
-        estimatedImprovement: "Reducir CPC podría ahorrar hasta un 30% en costos",
-      })
-    }
-
-    if (budget > 0 && spend / budget > 0.8) {
-      recommendations.push({
-        type: "budget_high",
-        priority: "medium",
-        title: "Presupuesto casi agotado",
-        description: `Has gastado ${((spend / budget) * 100).toFixed(0)}% de tu presupuesto.`,
-        action: "Revisar presupuesto",
-        impact: "Impacto medio en continuidad",
-        estimatedImprovement: "Aumentar presupuesto permitiría continuar generando resultados",
-      })
-    }
-
-    if (campaign.status === "paused") {
-      recommendations.push({
-        type: "campaign_paused",
-        priority: "low",
-        title: "Campaña pausada",
-        description: "Tu campaña está pausada. Reactívala cuando estés listo para continuar.",
-        action: "Reactivar campaña",
-        impact: "Mantenimiento",
-        estimatedImprovement: "Reactivar la campaña reanudará la generación de resultados",
-      })
-    }
-
-    return recommendations.length > 0
-      ? recommendations
-      : [
-          {
-            type: "performance_good",
-            priority: "low",
-            title: "Rendimiento estable",
-            description: "Tu campaña está funcionando bien. Continúa monitoreando las métricas.",
-            action: "Mantener estrategia actual",
-            impact: "Mantenimiento",
-            estimatedImprovement: "Pequeños ajustes podrían mejorar el rendimiento",
-          },
-        ]
-  }
-
-  // Generate consistent mock stats based on campaign ID
-  private generateMockStats(campaignId: string, campaign?: any) {
-    let hash = 0
-    for (let i = 0; i < campaignId.length; i++) {
-      const char = campaignId.charCodeAt(i)
-      hash = ((hash << 5) - hash) + char
-      hash = hash & hash
-    }
-    const seed = Math.abs(hash) / 2147483647
-
-    const conversions = Math.floor(seed * 100) + 5
-    const spend = Number((seed * 1000).toFixed(2))
-    
-    // Calculate revenue ONLY if product_price is provided (real data from user)
-    // DO NOT invent revenue - it should come from API or user input
-    let revenue = 0
-    let totalSales = 0
-    if (campaign?.product_price && conversions > 0) {
-      revenue = Number((conversions * campaign.product_price).toFixed(2))
-      totalSales = revenue
-    }
-    
-    // Calculate profit if product_cost is also provided
-    let profit: number | undefined = undefined
-    if (campaign?.product_cost !== undefined && conversions > 0 && revenue > 0) {
-      const totalProductCost = conversions * campaign.product_cost
-      profit = revenue - totalProductCost
-    }
-    
-    // Calculate CPA (Cost Per Acquisition)
-    const cpa = conversions > 0 ? Number((spend / conversions).toFixed(2)) : undefined
-    
-    // Calculate ROA (Return on Advertising)
-    // If profit is available, use profit-based ROA (more accurate)
-    // Otherwise, use revenue-based ROA if revenue exists
-    let roa: number | undefined = undefined
-    if (spend > 0) {
-      if (profit !== undefined) {
-        roa = Number((profit / spend).toFixed(2))
-      } else if (revenue > 0) {
-        roa = Number((revenue / spend).toFixed(2))
-      }
-    }
-
-    return {
-      impressions: Math.floor(seed * 50000) + 1000,
-      clicks: Math.floor(seed * 2000) + 50,
-      ctr: Number((seed * 5).toFixed(4)) / 100, // CTR as decimal (0.05 = 5%)
-      spend,
-      conversions,
-      revenue,
-      total_sales: totalSales,
-      cpa,
-      roa,
-      cost_per_click: Number((seed * 3).toFixed(2)),
-      cost_per_conversion: cpa,
-      reach: Math.floor(seed * 30000) + 5000,
-      cpm: Number((seed * 10 + 2).toFixed(2)),
-    }
-  }
-
-  // Generate insights data object from campaign metrics
-  private generateInsightsData(campaign: any): any {
-    // Get metrics from mock_stats (could be per-platform or flat)
-    let stats = campaign.mock_stats
-    if (stats && typeof stats === 'object' && !Array.isArray(stats)) {
-      // Check if it's per-platform structure
-      const platforms = ['meta', 'google_ads', 'linkedin']
-      const hasPlatformKeys = platforms.some(p => stats && typeof stats === 'object' && p in stats)
-      
-      if (hasPlatformKeys) {
-        // Per-platform - use first platform or aggregate
-        const firstPlatform = Object.keys(stats)[0]
-        stats = (stats as Record<string, any>)[firstPlatform] || {}
-      }
-    }
-
-    // Build comprehensive insights data object
-    return {
-      campaign_id: campaign.id,
-      campaign_name: campaign.name,
-      platform: campaign.platforms?.[0] || 'unknown',
-      status: campaign.status,
-      
-      // Metrics from campaign
-      stats: stats || {
-        spend: campaign.spend_usd || 0,
-        impressions: 0,
-        clicks: 0,
-        ctr: 0,
-      },
-      
-      // Budget information
-      budget: {
-        daily: campaign.budget_usd || 0,
-        lifetime: campaign.lifetime_budget || null,
-        spent: campaign.spend_usd || 0,
-        remaining: (campaign.budget_usd || 0) - (campaign.spend_usd || 0),
-        utilization_percent: campaign.budget_usd > 0 
-          ? ((campaign.spend_usd || 0) / campaign.budget_usd * 100).toFixed(2)
-          : 0,
-      },
-      
-      // Campaign settings
-      settings: {
-        objective: campaign.objective || 'OUTCOME_TRAFFIC',
-        billing_event: campaign.billing_event || 'IMPRESSIONS',
-        bid_strategy: campaign.bid_strategy || 'LOWEST_COST_WITHOUT_CAP',
-        status: campaign.status,
-        special_ad_categories: campaign.special_ad_categories || [],
-      },
-      
-      // Performance indicators
-      performance: {
-        is_active: campaign.status === 'active',
-        has_budget_remaining: (campaign.budget_usd || 0) > (campaign.spend_usd || 0),
-        efficiency_score: this.calculateEfficiencyScore(stats),
-      },
-      
-      // Dates
-      dates: {
-        start_date: campaign.start_date,
-        end_date: campaign.end_date,
-        created_at: campaign.created_at,
-        last_synced_at: campaign.last_synced_at,
-      },
-      
-      // Timestamp
-      calculated_at: new Date().toISOString(),
-    }
-  }
-
-  // Calculate an efficiency score (0-100) based on metrics
-  private calculateEfficiencyScore(stats: any): number {
-    if (!stats || typeof stats !== 'object') return 50 // Default middle score
-
-    let score = 50 // Start at 50 (neutral)
-
-    // CTR scoring (good CTR is 2-5%)
-    if (stats.ctr !== undefined) {
-      const ctrPercent = typeof stats.ctr === 'number' && stats.ctr < 1 
-        ? stats.ctr * 100 
-        : stats.ctr
-      if (ctrPercent >= 2 && ctrPercent <= 5) {
-        score += 15 // Good CTR
-      } else if (ctrPercent < 1) {
-        score -= 20 // Low CTR
-      }
-    }
-
-    // CPC scoring (lower is better, but depends on industry)
-    if (stats.cost_per_click !== undefined && stats.cost_per_click > 0) {
-      if (stats.cost_per_click < 1) {
-        score += 10 // Very efficient CPC
-      } else if (stats.cost_per_click > 3) {
-        score -= 15 // High CPC
-      }
-    }
-
-    // ROA scoring (higher is better)
-    if (stats.roa !== undefined && stats.roa > 0) {
-      if (stats.roa >= 3) {
-        score += 20 // Excellent ROA
-      } else if (stats.roa >= 2) {
-        score += 10 // Good ROA
-      } else if (stats.roa < 1) {
-        score -= 25 // Losing money
-      }
-    }
-
-    // CPA scoring (lower is better)
-    if (stats.cpa !== undefined && stats.cpa > 0) {
-      if (stats.cpa < 20) {
-        score += 10 // Good CPA
-      } else if (stats.cpa > 50) {
-        score -= 15 // High CPA
-      }
-    }
-
-    // Ensure score stays within 0-100 range
-    return Math.max(0, Math.min(100, Math.round(score)))
-  }
 }
 

@@ -69,6 +69,65 @@ export class CampaignMetricsHistoryRepository {
   }
 
   /**
+   * Bulk-insert daily snapshots for an imported campaign without duplicating
+   * rows that already exist for the same (campaign_id, platform, date).
+   * Used by the import backfill to populate historical data fire-and-forget.
+   */
+  async bulkUpsertDailySnapshots(snapshots: CampaignMetricSnapshot[]): Promise<void> {
+    if (snapshots.length === 0) return
+
+    const campaignId = snapshots[0].campaign_id
+    const platform = snapshots[0].platform ?? null
+
+    // Fetch existing dates to avoid duplicates (no unique DB constraint needed).
+    let query = supabaseAdmin
+      .from("campaign_metrics_history")
+      .select("recorded_at")
+      .eq("campaign_id", campaignId)
+
+    if (platform) query = query.eq("platform", platform)
+
+    const { data: existing } = await query
+
+    const existingDates = new Set(
+      (existing ?? []).map((r) => new Date(r.recorded_at).toISOString().slice(0, 10))
+    )
+
+    const toInsert = snapshots.filter((s) => {
+      const date = s.recorded_at
+        ? new Date(s.recorded_at).toISOString().slice(0, 10)
+        : null
+      return date !== null && !existingDates.has(date)
+    })
+
+    if (toInsert.length === 0) return
+
+    const { error } = await supabaseAdmin.from("campaign_metrics_history").insert(
+      toInsert.map((s) => ({
+        campaign_id: s.campaign_id,
+        platform: s.platform ?? null,
+        recorded_at: s.recorded_at ?? new Date().toISOString(),
+        spend: s.spend,
+        impressions: s.impressions,
+        clicks: s.clicks,
+        ctr: s.ctr,
+        conversions: s.conversions ?? null,
+        revenue: s.revenue ?? null,
+        total_sales: s.total_sales ?? null,
+        cpa: s.cpa ?? null,
+        roa: s.roa ?? null,
+        cost_per_click: s.cost_per_click ?? null,
+        cost_per_conversion: s.cost_per_conversion ?? null,
+        cpm: s.cpm ?? null,
+        reach: s.reach ?? null,
+        raw_data: s.raw_data ?? null,
+      }))
+    )
+
+    if (error) throw error
+  }
+
+  /**
    * Store multiple snapshots (for multi-platform campaigns)
    */
   async storeMultipleSnapshots(snapshots: CampaignMetricSnapshot[]): Promise<CampaignMetricSnapshot[]> {

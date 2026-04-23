@@ -5,6 +5,8 @@ import { CampaignsController } from "@/interfaces/http/controllers/CampaignsCont
 import { ImagesController } from "@/interfaces/http/controllers/ImagesController"
 import { PlatformsController } from "@/interfaces/http/controllers/PlatformsController"
 import { ClientsController } from "@/interfaces/http/controllers/ClientsController"
+import { DashboardController } from "@/interfaces/http/controllers/DashboardController"
+import { MultichannelCampaignsController } from "@/interfaces/http/controllers/MultichannelCampaignsController"
 
 export async function routes(app: FastifyInstance) {
   await app.register(userRoutes, { prefix: "/users" })
@@ -13,4 +15,6 @@ export async function routes(app: FastifyInstance) {
   await app.register(CampaignsController, { prefix: "" })
   await app.register(ImagesController, { prefix: "" })
   await app.register(PlatformsController, { prefix: "" })
+  await app.register(DashboardController, { prefix: "" })
+  await app.register(MultichannelCampaignsController, { prefix: "/multichannel-campaigns" })
 }

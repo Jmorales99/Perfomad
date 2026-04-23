@@ -1,10 +1,10 @@
 import Fastify from "fastify"
 import cors from "@fastify/cors"
 import helmet from "@fastify/helmet"
+import rateLimit from "@fastify/rate-limit"
 import swagger from "@fastify/swagger"
 import swaggerUi from "@fastify/swagger-ui"
 import { routes } from "./routes/index.js"
-import authPlugin from "./plugins/authPlugin.js"
 import { swaggerSchemas } from "./openapi/swaggerSchemas.js"
 import { authRoutes } from "./routes/authRoutes.js"
 import { securityHeadersPlugin } from "./middlewares/securityHeaders.js"
@@ -18,13 +18,19 @@ export function buildServer() {
 
   app.register(cors, {
     origin: allowedOrigins,
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
     credentials: true,
   })
 
   app.register(helmet)
   app.register(securityHeadersPlugin)
+
+  // Global rate limiting — per-route overrides (like POST /campaigns) set their
+  // own stricter policy via `config.rateLimit` on the route options.
+  app.register(rateLimit, {
+    global: false, // only active on routes that opt-in via config.rateLimit
+  })
 
   Object.entries(swaggerSchemas).forEach(([name, schema]) => {
     app.addSchema({ $id: name, ...schema })
@@ -54,8 +60,6 @@ export function buildServer() {
     routePrefix: "/docs",
     staticCSP: true,
   })
-
-  app.register(authPlugin)
 
   app.after(() => {
     app.register(authRoutes, { prefix: "/v1/auth" })

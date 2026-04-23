@@ -2,7 +2,7 @@
  * Domain interface for ad accounts (platform connections).
  * All ad-related data is scoped by user_id + client_id.
  */
-export type Platform = "meta" | "google_ads" | "linkedin"
+export type Platform = "meta" | "google_ads" | "linkedin" | "tiktok"
 
 export interface AdAccount {
   id: string
@@ -24,6 +24,7 @@ export interface AdAccount {
   refresh_token_iv: string | null
   refresh_token_tag: string | null
   token_expires_at: string | null
+  connection_status: "connected" | "reconnect_required" | "error"
   created_at: string
 }
 
@@ -55,8 +56,10 @@ export interface AdAccountsRepository {
   findByUserClientAndPlatform(
     userId: string,
     clientId: string,
-    platform: Platform
+    platform: Platform,
+    options?: { includeInactive?: boolean }
   ): Promise<AdAccount | null>
   update(userId: string, id: string, updates: Partial<AdAccount>): Promise<AdAccount>
+  markConnectionStatus(userId: string, adAccountId: string, status: "connected" | "reconnect_required" | "error"): Promise<void>
   delete(userId: string, id: string): Promise<void>
 }

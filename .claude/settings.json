@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -E \"\\\\.\\(ts|tsx\\)$\")",
+      "Bash(npm audit *)",
+      "Bash(node -e \"const d=JSON.parse\\(require\\('fs'\\).readFileSync\\('/dev/stdin','utf8'\\)\\); const vulns=d.vulnerabilities||{}; const high=Object.entries\\(vulns\\).filter\\(\\([,v]\\)=>['high','critical'].includes\\(v.severity\\)\\); console.log\\('Total vulnerabilities:', d.metadata?.vulnerabilities\\); high.forEach\\(\\([name,v]\\)=>console.log\\(v.severity.toUpperCase\\(\\), name, '-', v.via?.map?.\\(x=>typeof x==='string'?x:x.title\\).join\\(', '\\)\\)\\)\")"
+    ]
+  }
+}

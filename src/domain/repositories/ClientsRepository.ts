@@ -13,4 +13,10 @@ export interface ClientsRepository {
   listByUser(userId: string): Promise<Client[]>
   getById(userId: string, clientId: string): Promise<Client | null>
   create(userId: string, name: string, description?: string | null): Promise<Client>
+  /** Idempotent: creates "Default" if it does not exist; returns the row either way. */
+  upsertDefault(userId: string): Promise<Client>
+  /** Returns total number of clients owned by the user. */
+  countByUser(userId: string): Promise<number>
+  /** Deletes a client. Ownership (user_id) is enforced by the query itself. */
+  deleteById(userId: string, clientId: string): Promise<void>
 }

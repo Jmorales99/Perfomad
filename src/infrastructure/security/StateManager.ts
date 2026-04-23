@@ -1,7 +1,6 @@
 import { supabaseAdmin } from "@/infrastructure/db/supabaseClient"
+import type { Platform } from "@/domain/repositories/AdAccountsRepository"
 import { CryptoService } from "./CryptoService"
-
-export type Platform = "meta" | "google_ads" | "linkedin" | "tiktok" | "youtube"
 
 export interface OAuthStateData {
   state: string
