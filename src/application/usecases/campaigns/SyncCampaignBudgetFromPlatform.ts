@@ -100,7 +100,7 @@ export class SyncCampaignBudgetFromPlatform {
     }
 
     const localDaily =
-      (campaign as any).budget_local_daily ?? (campaign as any).budget_usd ?? null
+      (campaign as any).budget_local_daily ?? (campaign as any).budget_amount ?? null
     const localLifetime =
       (campaign as any).budget_local_lifetime ?? (campaign as any).lifetime_budget ?? null
 
@@ -132,7 +132,7 @@ export class SyncCampaignBudgetFromPlatform {
       updates.budget_source_of_truth = "platform"
       if (platformDaily !== null) {
         updates.budget_local_daily = platformDaily
-        updates.budget_usd = platformDaily
+        updates.budget_amount = platformDaily
       }
       if (platformLifetime !== null) {
         updates.budget_local_lifetime = platformLifetime
@@ -178,7 +178,7 @@ export class SyncCampaignBudgetFromPlatform {
     return {
       campaign_id: campaignId,
       platform,
-      local_daily: numberOrNull(campaign.budget_local_daily ?? campaign.budget_usd),
+      local_daily: numberOrNull(campaign.budget_local_daily ?? (campaign as any).budget_amount),
       local_lifetime: numberOrNull(campaign.budget_local_lifetime ?? campaign.lifetime_budget),
       platform_daily: null,
       platform_lifetime: null,
@@ -193,7 +193,7 @@ export class SyncCampaignBudgetFromPlatform {
 }
 
 function resolvePlatformCampaignId(campaign: any, platform: string): string | null {
-  const field = campaign.platform_campaign_id || campaign.mock_campaign_id
+  const field = campaign.platform_campaign_id
   if (!field) return null
   try {
     const parsed = typeof field === "string" ? JSON.parse(field) : field

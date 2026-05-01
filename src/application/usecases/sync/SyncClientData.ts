@@ -3,6 +3,8 @@ import { CampaignMetricsHistoryRepository } from "@/infrastructure/repositories/
 import { SupabaseAdAccountsRepository } from "@/infrastructure/repositories/SupabaseAdAccountsRepository"
 import { SyncConnectedAccounts } from "@/application/usecases/adaccounts/SyncConnectedAccounts"
 import { SyncCampaignMetrics } from "@/application/usecases/campaigns/SyncCampaignMetrics"
+import { SyncProductMetrics } from "@/application/usecases/campaigns/SyncProductMetrics"
+import { SupabaseProductMetricsRepository } from "@/infrastructure/repositories/SupabaseProductMetricsRepository"
 
 export interface SyncCampaignDetail {
   campaign_id: string
@@ -60,10 +62,10 @@ export class SyncClientData {
 
     // 3. Separate syncable campaigns from those without a platform link
     const syncable = campaigns.filter(
-      (c) => !!(c as any).platform_campaign_id || !!(c as any).mock_campaign_id
+      (c) => !!(c as any).platform_campaign_id
     )
     const skipped = campaigns.filter(
-      (c) => !(c as any).platform_campaign_id && !(c as any).mock_campaign_id
+      (c) => !(c as any).platform_campaign_id
     )
 
     const details: SyncCampaignDetail[] = skipped.map((c) => ({
@@ -71,6 +73,9 @@ export class SyncClientData {
       campaign_name: c.name,
       status: "skipped",
     }))
+
+    const productMetricsRepo = new SupabaseProductMetricsRepository()
+    const syncProductMetrics = new SyncProductMetrics(this.campaignsRepo, productMetricsRepo)
 
     // 4. Sync in batches of BATCH_SIZE to avoid platform rate limits
     for (let i = 0; i < syncable.length; i += BATCH_SIZE) {
@@ -83,6 +88,13 @@ export class SyncClientData {
         const result = results[j]
         if (result.status === "fulfilled") {
           details.push({ campaign_id: campaign.id, campaign_name: campaign.name, status: "synced" })
+          // Best-effort product sync for platforms that support it
+          const platforms: string[] = Array.isArray((campaign as any).platforms)
+            ? (campaign as any).platforms
+            : []
+          if (platforms.some((p) => p === "google_ads" || p === "meta")) {
+            syncProductMetrics.execute(userId, campaign.id).catch(() => {})
+          }
         } else {
           details.push({
             campaign_id: campaign.id,

@@ -9,18 +9,18 @@ export class EnrichCampaignsWithMetrics {
       : await this.campaignsRepo.listByUser(userId)
 
     return campaigns.map((campaign) => {
-      if (!campaign.mock_stats) return campaign
+      if (!campaign.cached_metrics) return campaign
 
-      const stats = campaign.mock_stats
+      const stats = campaign.cached_metrics
       if (typeof stats === 'object' && !Array.isArray(stats)) {
         const platforms = ['meta', 'google_ads', 'linkedin', 'tiktok']
         const hasPlatformKeys = platforms.some(p => p in (stats as object))
         if (hasPlatformKeys) {
           const aggregated = this.aggregatePlatformMetrics(stats as Record<string, any>)
-          return { ...campaign, mock_stats: aggregated, spend_usd: aggregated.spend || campaign.spend_usd || 0 }
+          return { ...campaign, cached_metrics: aggregated, spend_amount: aggregated.spend || (campaign as any).spend_amount || 0 }
         }
       }
-      return { ...campaign, spend_usd: (stats as any).spend || campaign.spend_usd || 0 }
+      return { ...campaign, spend_amount: (stats as any).spend || (campaign as any).spend_amount || 0 }
     })
   }
 

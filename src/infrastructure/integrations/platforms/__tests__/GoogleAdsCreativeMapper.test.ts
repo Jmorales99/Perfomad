@@ -191,9 +191,84 @@ describe("buildAdCreativeFromRowData", () => {
     expect(result.type).toBe("carousel")
     expect(result.cards.length).toBeLessThanOrEqual(8)
   })
+
+  // ── VIDEO_RESPONSIVE_AD ────────────────────────────────────────────────────
+
+  it("returns video type for VIDEO_RESPONSIVE_AD when a YouTube ID is resolved", () => {
+    const assetMap = new Map([
+      ["customers/1/assets/VR1", { youtubeId: "ytVideoId123" }],
+    ])
+    const result = buildAdCreativeFromRowData(
+      "VIDEO_RESPONSIVE_AD",
+      {
+        videoResponsiveAd: {
+          videos: [{ asset: "customers/1/assets/VR1" }],
+          companionBanners: [],
+        },
+      },
+      assetMap
+    )
+    expect(result.type).toBe("video")
+    expect(result.thumbnail_url).toBe("https://img.youtube.com/vi/ytVideoId123/hqdefault.jpg")
+    expect(result.video_url).toBe("https://www.youtube.com/watch?v=ytVideoId123")
+    expect(result.image_url).toBeNull()
+  })
+
+  it("returns image type for VIDEO_RESPONSIVE_AD when only a companion banner is resolved", () => {
+    const assetMap = new Map([
+      ["customers/1/assets/BANNER1", { imageUrl: "https://example.com/banner.jpg" }],
+    ])
+    const result = buildAdCreativeFromRowData(
+      "VIDEO_RESPONSIVE_AD",
+      {
+        videoResponsiveAd: {
+          videos: [],
+          companionBanners: [{ asset: "customers/1/assets/BANNER1" }],
+        },
+      },
+      assetMap
+    )
+    expect(result.type).toBe("image")
+    expect(result.image_url).toBe("https://example.com/banner.jpg")
+    expect(result.thumbnail_url).toBe("https://example.com/banner.jpg")
+  })
+
+  it("returns unknown for VIDEO_RESPONSIVE_AD when no assets are resolved", () => {
+    const result = buildAdCreativeFromRowData(
+      "VIDEO_RESPONSIVE_AD",
+      {
+        videoResponsiveAd: {
+          videos: [{ asset: "customers/1/assets/MISSING" }],
+          companionBanners: [],
+        },
+      },
+      EMPTY_MAP
+    )
+    expect(result.type).toBe("unknown")
+    expect(result.image_url).toBeNull()
+  })
+
+  it("handles snake_case keys for VIDEO_RESPONSIVE_AD", () => {
+    const assetMap = new Map([
+      ["customers/1/assets/SN_VR", { youtubeId: "snakeYtId" }],
+    ])
+    const result = buildAdCreativeFromRowData(
+      "VIDEO_RESPONSIVE_AD",
+      {
+        video_responsive_ad: {
+          videos: [{ asset: "customers/1/assets/SN_VR" }],
+          companion_banners: [],
+        },
+      },
+      assetMap
+    )
+    expect(result.type).toBe("video")
+    expect(result.video_url).toBe("https://www.youtube.com/watch?v=snakeYtId")
+  })
 })
 
 // ── collectAssetResourceNames ─────────────────────────────────────────────────
+
 
 describe("collectAssetResourceNames", () => {
   it("collects responsive_display_ad marketingImages asset refs", () => {
@@ -249,5 +324,35 @@ describe("collectAssetResourceNames", () => {
     const out = new Set<string>()
     collectAssetResourceNames({}, out)
     expect(out.size).toBe(0)
+  })
+
+  it("collects video_responsive_ad videos and companion_banners refs (camelCase)", () => {
+    const out = new Set<string>()
+    collectAssetResourceNames(
+      {
+        videoResponsiveAd: {
+          videos: [{ asset: "customers/1/assets/VR_V" }],
+          companionBanners: [{ asset: "customers/1/assets/VR_B" }],
+        },
+      },
+      out
+    )
+    expect(out.has("customers/1/assets/VR_V")).toBe(true)
+    expect(out.has("customers/1/assets/VR_B")).toBe(true)
+  })
+
+  it("collects video_responsive_ad refs (snake_case)", () => {
+    const out = new Set<string>()
+    collectAssetResourceNames(
+      {
+        video_responsive_ad: {
+          videos: [{ asset: "customers/2/assets/SN_V" }],
+          companion_banners: [{ asset: "customers/2/assets/SN_B" }],
+        },
+      },
+      out
+    )
+    expect(out.has("customers/2/assets/SN_V")).toBe(true)
+    expect(out.has("customers/2/assets/SN_B")).toBe(true)
   })
 })

@@ -4,11 +4,12 @@ import type { OptimizationRepository } from "@/infrastructure/repositories/Optim
 export interface LatestRecommendationsResult {
   run_id: string | null
   status: string | null
+  prompt_version: string | null
   summary: {
     overall_health: string
     headline: string
     health_score?: number
-    health_score_criteria?: { ctr_performance: number; cpa_efficiency: number; budget_utilization: number; creative_freshness: number }
+    health_score_criteria?: Record<string, number>
     health_trend?: { direction: string; delta_pts?: number | null }
     alerts?: Array<{ urgency: string; type: string; message: string }>
     next_step?: string
@@ -46,6 +47,7 @@ export class GetLatestRecommendations {
       return {
         run_id: null,
         status: null,
+        prompt_version: null,
         summary: null,
         generated_at: null,
         recommendations: [],
@@ -83,6 +85,7 @@ export class GetLatestRecommendations {
     return {
       run_id: latest.id,
       status: latest.status,
+      prompt_version: latest.prompt_version ?? null,
       summary: latest.summary,
       generated_at: latest.created_at,
       recommendations,

@@ -17,6 +17,7 @@ export const campaignContextSchema = z.object({
   name: z.string(),
   platform: platformEnum,
   objective: z.string().nullable().optional(),
+  is_catalog: z.boolean().optional(),
   country: z.string().nullable().optional(),
   status: z.enum(["active", "paused", "completed", "removed", "unknown"]),
   start_date: z.string().nullable().optional(),
@@ -32,7 +33,7 @@ export const budgetContextSchema = z.object({
   drift_pct: z.number().nullable().optional(),
   spend_total: z.number().nonnegative().default(0),
   spend_period: z.number().nonnegative().default(0),
-  currency: z.string().default("USD"),
+  currency: z.string().trim().length(3),
 })
 
 export const metricsPeriodSchema = z.object({
@@ -122,6 +123,25 @@ export const policySchema = z.object({
   platform_support: z.enum(["automatic", "manual_required", "unsupported"]),
 })
 
+export const activeProductSummarySchema = z.object({
+  product_id: z.string(),
+  product_name: z.string(),
+  spend: z.number().nonnegative().default(0),
+  spend_pct: z.number().nonnegative().default(0),
+  roas: z.number().nullable().optional(),
+  impressions: z.number().nonnegative().default(0),
+  clicks: z.number().nonnegative().default(0),
+  conversions: z.number().nonnegative().default(0),
+})
+
+export const pixelEventsSchema = z.object({
+  leads: z.number().nonnegative().default(0),
+  page_views: z.number().nonnegative().default(0),
+  form_starts: z.number().nonnegative().default(0),
+  form_completions: z.number().nonnegative().default(0),
+  period_days: z.number().int().positive(),
+})
+
 export const optimizationInputSchema = z.object({
   version: z.literal(OPTIMIZATION_INPUT_VERSION),
   generated_at: z.string(),
@@ -132,6 +152,8 @@ export const optimizationInputSchema = z.object({
   benchmarks: benchmarksSchema,
   history: z.array(historyPointSchema).optional(),
   active_ads: z.array(activeAdSummarySchema).optional(),
+  active_products: z.array(activeProductSummarySchema).optional(),
+  pixel_events: pixelEventsSchema.optional(),
   policy: policySchema,
 })
 
@@ -141,3 +163,5 @@ export type OptimizationInputBudget = z.infer<typeof budgetContextSchema>
 export type OptimizationInputMetrics = z.infer<typeof metricsBlockSchema>
 export type OptimizationInputBenchmarks = z.infer<typeof benchmarksSchema>
 export type ActiveAdSummary = z.infer<typeof activeAdSummarySchema>
+export type ActiveProductSummary = z.infer<typeof activeProductSummarySchema>
+export type PixelEvents = z.infer<typeof pixelEventsSchema>

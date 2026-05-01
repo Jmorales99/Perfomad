@@ -29,7 +29,7 @@ export class GetCampaignInsights {
       throw new Error("Campaign not found")
     }
 
-    console.log("GetCampaignInsights: Campaign found", { campaignId, hasMockStats: !!campaign.mock_stats, hasMockCampaignId: !!campaign.mock_campaign_id })
+    console.log("GetCampaignInsights: Campaign found", { campaignId, hasMockStats: !!campaign.cached_metrics })
 
     // 2. Try to use stored insights first (if enabled and available)
     if (useStoredData) {
@@ -52,8 +52,8 @@ export class GetCampaignInsights {
     }
 
     // 3. If no stored insights or stale, fetch from platform APIs
-    const campaignIdField = (campaign as any).platform_campaign_id || (campaign as any).mock_campaign_id
-    
+    const campaignIdField = (campaign as any).platform_campaign_id
+
     if (campaignIdField) {
       try {
         // Parse platform campaign IDs (stored as JSON)
@@ -195,8 +195,7 @@ export class GetCampaignInsights {
     // Try to get calculated metrics from stored raw data first
     let calculatedMetrics: any = null
     
-    // Option 1: Calculate from stored raw_data_platform (or raw_data_plai for backward compatibility)
-    const rawDataField = (campaign as any).raw_data_platform || (campaign as any).raw_data_plai
+    const rawDataField = (campaign as any).raw_data_platform
     if (rawDataField) {
       try {
         const rawData = typeof rawDataField === 'string' 
@@ -219,7 +218,7 @@ export class GetCampaignInsights {
     if (!calculatedMetrics) {
       const stats = insights?.stats || insights || {}
       calculatedMetrics = MetricsCalculator.calculateFromRaw({
-        spend: stats?.spend || campaign.spend_usd || 0,
+        spend: stats?.spend || (campaign as any).spend_amount || 0,
         impressions: stats?.impressions || 0,
         clicks: stats?.clicks || 0,
         ctr: stats?.ctr || 0,
@@ -237,7 +236,6 @@ export class GetCampaignInsights {
       impressions,
       ctr,
       conversions,
-      revenue,
       cpa,
       roa,
       cost_per_click: cpc,
@@ -337,12 +335,12 @@ export class GetCampaignInsights {
       })
     }
 
-    if (campaign.budget_usd > 0 && spend / campaign.budget_usd > 0.9) {
+    if ((campaign as any).budget_amount > 0 && spend / (campaign as any).budget_amount > 0.9) {
       recommendations.push({
         type: "budget_high",
         priority: "medium",
         title: "Presupuesto casi agotado",
-        description: `Has gastado ${((spend / campaign.budget_usd) * 100).toFixed(0)}% de tu presupuesto. La campaña podría detenerse pronto.`,
+        description: `Has gastado ${((spend / (campaign as any).budget_amount) * 100).toFixed(0)}% de tu presupuesto. La campaña podría detenerse pronto.`,
         action: "Aumentar presupuesto o pausar campaña",
         impact: "Impacto medio en continuidad",
         estimatedImprovement: "Aumentar presupuesto permitiría continuar generando resultados",

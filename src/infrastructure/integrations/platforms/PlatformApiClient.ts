@@ -3,6 +3,26 @@ import type { Platform } from "@/infrastructure/repositories/SupabaseAdAccountsR
 export type { Platform }
 
 /**
+ * Per-product metrics row returned by product-level Insights calls.
+ * Covers Meta Catalog (Dynamic Product Ads) and Google Shopping / PMax.
+ * All numeric fields are 0 when no data is available (never null).
+ */
+export interface ProductInsightsRow {
+  product_id: string
+  product_title: string | null
+  image_url?: string | null
+  impressions: number
+  clicks: number
+  spend: number
+  conversions: number
+  revenue: number
+  ctr: number
+  cpc: number
+  roas: number
+  raw?: unknown
+}
+
+/**
  * Per-campaign metrics row returned by level=campaign Insights calls.
  * All numeric fields are 0 when no data is available (never null).
  */
@@ -59,6 +79,8 @@ export interface AdCreative {
    * Only present for video creatives after enrichment.
    */
   video_url?: string | null
+  /** Google Shopping: Merchant Center merchant ID — set for SHOPPING campaigns, triggers product enrichment. */
+  merchant_id?: string | null
   /** Non-empty only for carousel/multi-image creatives. */
   cards: Array<{
     /** Low-res preview returned directly by the platform. */
@@ -307,6 +329,16 @@ export interface PlatformApiClient {
     accessToken: string,
     options?: { platformAccountId?: string }
   ): Promise<void>
+  /**
+   * Returns per-product metrics for an ad account (Meta Catalog / Google Shopping / PMax).
+   * If the account has no catalog or Shopping campaigns, returns [].
+   * Optionally filtered to a single campaign via options.campaignId.
+   */
+  getProductInsights(
+    adAccountId: string,
+    accessToken: string,
+    options?: { campaignId?: string; since?: string; until?: string }
+  ): Promise<ProductInsightsRow[]>
 }
 
 export interface PlatformClientConfig {

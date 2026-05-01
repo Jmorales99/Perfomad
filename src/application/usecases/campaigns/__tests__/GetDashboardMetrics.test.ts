@@ -15,13 +15,14 @@ function baseCampaign() {
     client_id: "client-1",
     name: "Test Campaign",
     platforms: ["meta"] as ("meta" | "google_ads" | "linkedin" | "tiktok")[],
-    budget_usd: 1000,
-    spend_usd: 200,
+    budget_amount: 1000,
+    spend_amount: 200,
+    currency: "USD",
     status: "active" as "active" | "paused" | "completed",
     start_date: "2024-01-01T00:00:00Z",
     end_date: null,
     created_at: "2024-01-01T00:00:00Z",
-    mock_stats: null as any,
+    cached_metrics: null as any,
   }
 }
 
@@ -69,8 +70,8 @@ describe("GetDashboardMetrics", () => {
 
   it("aggregates spend and budget across campaigns", async () => {
     const campaigns = [
-      makeCampaign({ id: "1", spend_usd: 100, budget_usd: 500 }),
-      makeCampaign({ id: "2", spend_usd: 200, budget_usd: 1000 }),
+      makeCampaign({ id: "1", spend_amount: 100, budget_amount: 500 }),
+      makeCampaign({ id: "2", spend_amount: 200, budget_amount: 1000 }),
     ]
 
     const result = await useCase.execute("user-1", campaigns)
@@ -80,15 +81,15 @@ describe("GetDashboardMetrics", () => {
     expect(result.summary.budget_utilization).toBeCloseTo(20, 0)
   })
 
-  it("aggregates impressions and clicks from flat mock_stats", async () => {
+  it("aggregates impressions and clicks from flat cached_metrics", async () => {
     const campaigns = [
       makeCampaign({
         id: "1",
-        mock_stats: { spend: 100, impressions: 10000, clicks: 200, ctr: 0.02 },
+        cached_metrics: { spend: 100, impressions: 10000, clicks: 200, ctr: 0.02 },
       }),
       makeCampaign({
         id: "2",
-        mock_stats: { spend: 50, impressions: 5000, clicks: 100, ctr: 0.02 },
+        cached_metrics: { spend: 50, impressions: 5000, clicks: 100, ctr: 0.02 },
       }),
     ]
 
@@ -99,12 +100,12 @@ describe("GetDashboardMetrics", () => {
     expect(result.metrics.average_ctr).toBeCloseTo(2, 0) // 300/15000 * 100 = 2%
   })
 
-  it("aggregates metrics from per-platform mock_stats", async () => {
+  it("aggregates metrics from per-platform cached_metrics", async () => {
     const campaigns = [
       makeCampaign({
         id: "1",
         platforms: ["meta", "google_ads"],
-        mock_stats: {
+        cached_metrics: {
           meta: { spend: 100, impressions: 8000, clicks: 160, conversions: 10, revenue: 500 },
           google_ads: { spend: 50, impressions: 4000, clicks: 80, conversions: 5, revenue: 200 },
         } as any,
@@ -122,7 +123,7 @@ describe("GetDashboardMetrics", () => {
     const campaigns = [
       makeCampaign({
         id: "1",
-        mock_stats: { spend: 100, impressions: 1000, clicks: 50, ctr: 0.05 },
+        cached_metrics: { spend: 100, impressions: 1000, clicks: 50, ctr: 0.05 },
       }),
     ]
 
@@ -161,10 +162,10 @@ describe("GetDashboardMetrics", () => {
     expect(result.recent_campaigns[0].name).toBe("Campaign 7") // newest first
   })
 
-  it("handles campaigns without mock_stats gracefully", async () => {
+  it("handles campaigns without cached_metrics gracefully", async () => {
     const campaigns = [
-      makeCampaign({ id: "1", mock_stats: undefined as any }),
-      makeCampaign({ id: "2", mock_stats: null as any }),
+      makeCampaign({ id: "1", cached_metrics: undefined as any }),
+      makeCampaign({ id: "2", cached_metrics: null as any }),
     ]
 
     const result = await useCase.execute("user-1", campaigns)

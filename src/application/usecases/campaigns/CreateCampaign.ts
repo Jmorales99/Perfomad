@@ -6,6 +6,22 @@ import { MetaCampaignBuilder } from "@/application/services/MetaCampaignBuilder"
 import { TokenManager } from "@/infrastructure/integrations/TokenManager"
 import { AuditLogger } from "@/infrastructure/security/AuditLogger"
 import type { Platform } from "@/infrastructure/repositories/SupabaseAdAccountsRepository"
+import type { MediaRepository } from "@/domain/repositories/MediaRepository"
+
+export class CreativeBrandMismatchError extends Error {
+  constructor() {
+    super('El creativo pertenece a una marca diferente a la de la campaña.')
+    this.name = 'CreativeBrandMismatchError'
+  }
+}
+
+// Extrae el storage path de una URL firmada o pública de Supabase Storage
+const SUPABASE_STORAGE_PATH_REGEX = /\/storage\/v1\/object\/(?:sign|public)\/[^/]+\/(.+?)(?:\?|$)/
+
+function extractStoragePath(url: string): string | null {
+  const match = url.match(SUPABASE_STORAGE_PATH_REGEX)
+  return match ? decodeURIComponent(match[1]) : null
+}
 
 export class CreateCampaign {
   private tokenManager: TokenManager
@@ -13,7 +29,8 @@ export class CreateCampaign {
 
   constructor(
     private campaignsRepo: SupabaseCampaignsRepository,
-    private adAccountsRepo: SupabaseAdAccountsRepository
+    private adAccountsRepo: SupabaseAdAccountsRepository,
+    private mediaRepo?: MediaRepository
   ) {
     this.tokenManager = new TokenManager()
     this.auditLogger = new AuditLogger()
@@ -27,7 +44,7 @@ export class CreateCampaign {
     description?: string
     
     // Budget Options
-    budgetUsd?: number // Daily budget (global fallback)
+    budgetAmount?: number // Daily budget (global fallback)
     lifetimeBudget?: number // Lifetime budget (global fallback)
     platformBudgets?: Partial<Record<string, { budget_type: "daily" | "lifetime"; amount: number }>> // Per-platform overrides
     
@@ -74,6 +91,17 @@ export class CreateCampaign {
     productPrice?: number // Selling price per product unit
     productCost?: number // Production cost per product unit (optional)
   }) {
+    // 0. Validación cross-brand: el creativo debe pertenecer a la misma marca que la campaña
+    if (this.mediaRepo && input.clientId && input.creative?.mediaUrl) {
+      const storagePath = extractStoragePath(input.creative.mediaUrl)
+      if (storagePath) {
+        const record = await this.mediaRepo.findByStoragePath(storagePath)
+        if (record && record.clientId !== input.clientId) {
+          throw new CreativeBrandMismatchError()
+        }
+      }
+    }
+
     // 1. Get user's connected ad accounts
     const adAccounts = await this.adAccountsRepo.findByUserId(input.userId)
 
@@ -84,10 +112,11 @@ export class CreateCampaign {
       name: input.name,
       platforms: input.platforms,
       description: input.description || "",
-      budget_usd: input.budgetUsd ?? 0,
+      budget_amount: input.budgetAmount ?? 0,
+      currency: "USD",
       lifetime_budget: input.lifetimeBudget,
       platform_budgets: (input.platformBudgets as any) ?? null,
-      spend_usd: 0,
+      spend_amount: 0,
       status: "active",
       start_date: input.startDate ?? new Date().toISOString(),
       end_date: input.endDate ?? null,
@@ -135,7 +164,7 @@ export class CreateCampaign {
         const pb = input.platformBudgets?.[platform]
         const dailyBudget = pb
           ? (pb.budget_type === "daily" ? pb.amount : undefined)
-          : input.budgetUsd
+          : input.budgetAmount
         const lifetimeBudget = pb
           ? (pb.budget_type === "lifetime" ? pb.amount : undefined)
           : input.lifetimeBudget
@@ -272,7 +301,7 @@ export class CreateCampaign {
     const updated = await this.campaignsRepo.update(input.userId, localCampaign.id, {
       platform_campaign_id: platformCampaignIds, // JSONB
       raw_data_platform: rawDataByPlatform, // Store RAW data
-      mock_stats: calculatedMetrics, // Store calculated metrics (keep name for compatibility)
+      cached_metrics: calculatedMetrics,
     } as any)
 
     // Save initial historical snapshot

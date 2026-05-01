@@ -15,7 +15,7 @@ export interface OptimizationRunRecord {
     overall_health: string
     headline: string
     health_score?: number
-    health_score_criteria?: { ctr_performance: number; cpa_efficiency: number; budget_utilization: number; creative_freshness: number }
+    health_score_criteria?: Record<string, number>
     health_trend?: { direction: string; delta_pts?: number | null }
     alerts?: Array<{ urgency: string; type: string; message: string }>
     next_step?: string
@@ -43,6 +43,7 @@ export interface OptimizationRecommendationRecord {
   confidence: number | null
   applicable_to_platform: boolean
   platform_support: "automatic" | "manual_required" | "unsupported"
+  prompt_version: string | null
   created_at: string
 }
 

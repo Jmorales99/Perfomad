@@ -33,13 +33,14 @@ function makeCampaign(overrides: Record<string, any> = {}) {
     client_id: "client-1",
     name: "Test Campaign",
     platforms: ["meta"],
-    budget_usd: 1000,
-    spend_usd: 0,
+    budget_amount: 1000,
+    spend_amount: 0,
+    currency: "USD",
     status: "active",
     start_date: "2024-01-01T00:00:00Z",
     end_date: null,
     created_at: "2024-01-01T00:00:00Z",
-    mock_stats: null,
+    cached_metrics: null,
     ...overrides,
   }
 }
@@ -71,35 +72,35 @@ describe("EnrichCampaignsWithMetrics", () => {
     expect(repo.listByUser).not.toHaveBeenCalled()
   })
 
-  it("passes through flat mock_stats unchanged", async () => {
+  it("passes through flat cached_metrics unchanged", async () => {
     const stats = { spend: 100, impressions: 5000, clicks: 100, ctr: 0.02 }
-    vi.mocked(repo.listByUser).mockResolvedValue([makeCampaign({ mock_stats: stats })] as any)
+    vi.mocked(repo.listByUser).mockResolvedValue([makeCampaign({ cached_metrics: stats })] as any)
 
     const result = await useCase.execute("user-1")
 
-    expect(result[0].mock_stats).toEqual(stats)
-    expect(result[0].spend_usd).toBe(100)
+    expect(result[0].cached_metrics).toEqual(stats)
+    expect((result[0] as any).spend_amount).toBe(100)
   })
 
-  it("aggregates per-platform mock_stats into a flat object", async () => {
+  it("aggregates per-platform cached_metrics into a flat object", async () => {
     const perPlatformStats = {
       meta: { spend: 100, impressions: 8000, clicks: 160, conversions: 10, revenue: 500, total_sales: 500 },
       google_ads: { spend: 50, impressions: 4000, clicks: 80, conversions: 5, revenue: 200, total_sales: 200 },
     }
     vi.mocked(repo.listByUser).mockResolvedValue([
-      makeCampaign({ platforms: ["meta", "google_ads"], mock_stats: perPlatformStats }),
+      makeCampaign({ platforms: ["meta", "google_ads"], cached_metrics: perPlatformStats }),
     ] as any)
 
     const result = await useCase.execute("user-1")
 
-    const stats = result[0].mock_stats as any
+    const stats = result[0].cached_metrics as any
     expect(stats.spend).toBe(150)
     expect(stats.impressions).toBe(12000)
     expect(stats.clicks).toBe(240)
     expect(stats.conversions).toBe(15)
     expect(stats.revenue).toBe(700)
     expect(stats.total_sales).toBe(700)
-    expect(result[0].spend_usd).toBe(150)
+    expect((result[0] as any).spend_amount).toBe(150)
   })
 
   it("derives CTR correctly when aggregating per-platform stats", async () => {
@@ -108,23 +109,23 @@ describe("EnrichCampaignsWithMetrics", () => {
       google_ads: { spend: 50, impressions: 1000, clicks: 30 },
     }
     vi.mocked(repo.listByUser).mockResolvedValue([
-      makeCampaign({ platforms: ["meta", "google_ads"], mock_stats: perPlatformStats }),
+      makeCampaign({ platforms: ["meta", "google_ads"], cached_metrics: perPlatformStats }),
     ] as any)
 
     const result = await useCase.execute("user-1")
 
-    const stats = result[0].mock_stats as any
+    const stats = result[0].cached_metrics as any
     // 50 clicks / 2000 impressions = 0.025
     expect(stats.ctr).toBeCloseTo(0.025, 3)
   })
 
-  it("returns campaign as-is when mock_stats is null", async () => {
-    const campaign = makeCampaign({ mock_stats: null, spend_usd: 42 })
+  it("returns campaign as-is when cached_metrics is null", async () => {
+    const campaign = makeCampaign({ cached_metrics: null, spend_amount: 42 })
     vi.mocked(repo.listByUser).mockResolvedValue([campaign] as any)
 
     const result = await useCase.execute("user-1")
 
-    expect(result[0].mock_stats).toBeNull()
-    expect(result[0].spend_usd).toBe(42)
+    expect(result[0].cached_metrics).toBeNull()
+    expect((result[0] as any).spend_amount).toBe(42)
   })
 })

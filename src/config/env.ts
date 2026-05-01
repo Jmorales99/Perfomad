@@ -31,6 +31,12 @@ const envSchema = z
     GOOGLE_ADS_DEVELOPER_TOKEN: z.string().min(1).optional(),
     /** Google Ads REST API version segment, e.g. v23 (https://googleads.googleapis.com/{version}/...). */
     GOOGLE_ADS_API_VERSION: z.string().optional(),
+    /** MCC Manager Account customer ID. Required only if the ad account is managed under a Google Ads MCC. */
+    GOOGLE_ADS_LOGIN_CUSTOMER_ID: z.string().optional(),
+    /** Set to "true" to log raw GAQL queries and responses for debugging. Never enable in production. */
+    GOOGLE_ADS_DEBUG: z.string().optional(),
+    /** Redirect URI for Merchant Center OAuth callback. Register this in your Google Cloud OAuth app. */
+    GOOGLE_MC_REDIRECT_URI: z.string().url().optional(),
     // TikTok Marketing API (Advertiser OAuth MVP; account-holder URLs stored for future use)
     TIKTOK_ENABLED: z.union([z.boolean(), z.string()]).optional(),
     TIKTOK_APP_ID: z.string().optional(),

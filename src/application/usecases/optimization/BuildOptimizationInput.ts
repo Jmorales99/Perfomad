@@ -11,6 +11,8 @@ import {
   type OptimizationInput,
   type OptimizationInputBudget,
   type ActiveAdSummary,
+  type ActiveProductSummary,
+  type PixelEvents,
 } from "./schemas/OptimizationInput"
 
 export interface BuildInputResult {
@@ -100,6 +102,18 @@ export class BuildOptimizationInput {
     // Fetch active ads (best-effort — failures do not block optimization).
     const activeAds = await this.fetchActiveAds(campaign, platform, period).catch(() => undefined)
 
+    // Fetch product-level insights for Meta catalog campaigns (D13 support).
+    const activeProducts =
+      platform === "meta" && campaign.objective === "OUTCOME_SALES"
+        ? await this.fetchActiveProducts(campaign, platform, period, metrics.spend).catch(() => undefined)
+        : undefined
+
+    // Fetch pixel events for Meta leads campaigns (D8 variant selection).
+    const pixelEvents =
+      platform === "meta" && campaign.objective === "OUTCOME_LEADS"
+        ? await this.fetchPixelEvents(campaign, platform, period).catch(() => undefined)
+        : undefined
+
     const rawInput: OptimizationInput = {
       version: OPTIMIZATION_INPUT_VERSION,
       generated_at: new Date().toISOString(),
@@ -108,6 +122,7 @@ export class BuildOptimizationInput {
         name: campaign.name,
         platform,
         objective: campaign.objective ?? null,
+        is_catalog: (campaign as any).is_catalog ?? false,
         country: null,
         status: normalizeStatus(campaign.status),
         start_date: campaign.start_date ?? null,
@@ -137,12 +152,10 @@ export class BuildOptimizationInput {
         : undefined,
       history: historyPoints.length > 0 ? historyPoints : undefined,
       active_ads: activeAds && activeAds.length > 0 ? activeAds : undefined,
+      active_products: activeProducts && activeProducts.length > 0 ? activeProducts : undefined,
+      pixel_events: pixelEvents,
       policy: {
-        allowed_actions: [
-          ...config.allowed_actions,
-          "pause_ad",
-          "flag_creative",
-        ] as OptimizationInput["policy"]["allowed_actions"],
+        allowed_actions: config.allowed_actions as OptimizationInput["policy"]["allowed_actions"],
         max_budget_adjust_pct: config.max_budget_adjust_pct,
         min_days_before_action: config.min_days_before_action,
         min_spend_before_action: config.min_spend_before_action,
@@ -230,9 +243,117 @@ export class BuildOptimizationInput {
     return active.length > 0 ? active : undefined
   }
 
+  private async fetchActiveProducts(
+    campaign: Campaign,
+    platform: "meta" | "google_ads" | "linkedin" | "tiktok",
+    period: OptimizationInput["metrics_period"],
+    totalSpend: number
+  ): Promise<ActiveProductSummary[] | undefined> {
+    const campaignPlatformId = resolvePlatformCampaignId(campaign as any, platform)
+    if (!campaignPlatformId) return undefined
+
+    const clientId = (campaign as any).client_id
+    if (!clientId) return undefined
+
+    const adAccount = await this.deps.adAccountsRepo.findByUserClientAndPlatform(
+      campaign.user_id,
+      clientId,
+      platform
+    )
+    if (!adAccount) return undefined
+
+    const client = PlatformApiClientFactory.createClient(platform)
+    const accessToken = await this.tokenManager.getValidAccessToken(
+      adAccount as any,
+      async (rt: string) => client.refreshAccessToken(rt)
+    )
+
+    const rows = await client.getProductInsights(adAccount.platform_account_id, accessToken, {
+      campaignId: campaignPlatformId,
+      since: period.since,
+      until: period.until,
+    })
+
+    if (rows.length === 0) return undefined
+
+    const spendBase = totalSpend > 0 ? totalSpend : rows.reduce((s, r) => s + r.spend, 0)
+
+    return rows
+      .map((r) => ({
+        product_id: r.product_id,
+        product_name: r.product_title ?? r.product_id,
+        spend: r.spend,
+        spend_pct: spendBase > 0 ? (r.spend / spendBase) * 100 : 0,
+        roas: r.roas > 0 ? r.roas : r.spend > 0 && r.revenue > 0 ? r.revenue / r.spend : null,
+        impressions: r.impressions,
+        clicks: r.clicks,
+        conversions: r.conversions,
+      }))
+      .sort((a, b) => b.spend - a.spend)
+      .slice(0, 20)
+  }
+
+  private async fetchPixelEvents(
+    campaign: Campaign,
+    platform: "meta" | "google_ads" | "linkedin" | "tiktok",
+    period: OptimizationInput["metrics_period"]
+  ): Promise<PixelEvents | undefined> {
+    const campaignPlatformId = resolvePlatformCampaignId(campaign as any, platform)
+    if (!campaignPlatformId) return undefined
+
+    const clientId = (campaign as any).client_id
+    if (!clientId) return undefined
+
+    const adAccount = await this.deps.adAccountsRepo.findByUserClientAndPlatform(
+      campaign.user_id,
+      clientId,
+      platform
+    )
+    if (!adAccount) return undefined
+
+    const client = PlatformApiClientFactory.createClient(platform)
+    const accessToken = await this.tokenManager.getValidAccessToken(
+      adAccount as any,
+      async (rt: string) => client.refreshAccessToken(rt)
+    )
+
+    const adInsights = await client.getAdInsights(
+      adAccount.platform_account_id,
+      campaignPlatformId,
+      accessToken,
+      { since: period.since, until: period.until }
+    )
+
+    // Aggregate pixel action_types across all ads in the campaign.
+    let leads = 0, pageViews = 0, formStarts = 0, formCompletions = 0
+
+    for (const row of adInsights) {
+      for (const action of row.actions) {
+        const v = Number(action.value || 0)
+        if (action.action_type === "lead") { leads += v; formCompletions += v }
+        else if (action.action_type === "page_view") pageViews += v
+        else if (
+          action.action_type === "onsite_conversion.lead_grouped_other" ||
+          action.action_type === "onsite_conversion.lead_grouped" ||
+          action.action_type === "offsite_conversion.fb_pixel_lead"
+        ) formStarts += v
+      }
+    }
+
+    if (leads === 0 && pageViews === 0 && formStarts === 0) return undefined
+
+    return {
+      leads,
+      page_views: pageViews,
+      form_starts: formStarts,
+      form_completions: formCompletions,
+      period_days: period.days,
+    }
+  }
+
   private buildBudget(campaign: Campaign): OptimizationInputBudget {
     const c = campaign as any
-    const localDaily = numberOrNull(c.budget_local_daily) ?? numberOrNull(c.budget_usd)
+    const localDaily = numberOrNull(c.budget_local_daily) ?? numberOrNull(c.budget_amount)
     const localLifetime =
       numberOrNull(c.budget_local_lifetime) ?? numberOrNull(c.lifetime_budget)
     const platformDaily = numberOrNull(c.budget_platform_daily)
@@ -247,9 +368,9 @@ export class BuildOptimizationInput {
       platform_lifetime: platformLifetime,
       source_of_truth: sourceOfTruth,
       drift_pct: drift,
-      spend_total: Number(campaign.spend_usd ?? 0),
-      spend_period: Number(campaign.spend_usd ?? 0),
-      currency: "USD",
+      spend_total: Number(campaign.spend_amount ?? 0),
+      spend_period: Number(campaign.spend_amount ?? 0),
+      currency: (campaign as any).currency ?? "USD",
     }
   }
 }
@@ -257,7 +378,7 @@ export class BuildOptimizationInput {
 // ──────────────────────────────── helpers ───────────────────────────────────
 
 function resolvePlatformCampaignId(campaign: any, platform: string): string | null {
-  const field = campaign.platform_campaign_id || campaign.mock_campaign_id
+  const field = campaign.platform_campaign_id
   if (!field) return null
   try {
     const parsed = typeof field === "string" ? JSON.parse(field) : field
@@ -269,7 +390,7 @@ function resolvePlatformCampaignId(campaign: any, platform: string): string | nu
 
 function pickPrimaryPlatform(campaign: Campaign): "meta" | "google_ads" | "linkedin" | "tiktok" {
   if (Array.isArray(campaign.platforms) && campaign.platforms.length > 0) {
-    return campaign.platforms[0]
+    return campaign.platforms[0] as "meta" | "google_ads" | "linkedin" | "tiktok"
   }
   return "meta"
 }
@@ -293,7 +414,7 @@ function aggregateMetrics(
     return {
       impressions: 0,
       clicks: 0,
-      spend: Number(campaign.spend_usd ?? 0),
+      spend: Number(campaign.spend_amount ?? 0),
       reach: 0,
       ctr: 0,
       cpc: 0,

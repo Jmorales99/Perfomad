@@ -30,9 +30,9 @@ export class SyncCampaignMetrics {
       throw new Error("Campaña no encontrada")
     }
 
-    // 2. Get platform campaign IDs (support both old and new field names)
+    // 2. Get platform campaign IDs
     let platformCampaignIds: Record<string, string>
-    const campaignIdField = (campaign as any).platform_campaign_id || (campaign as any).mock_campaign_id
+    const campaignIdField = (campaign as any).platform_campaign_id
     
     if (!campaignIdField) {
       throw new Error("La campaña no está vinculada a ninguna plataforma. Primero debe crearse en la plataforma de publicidad.")
@@ -73,6 +73,8 @@ export class SyncCampaignMetrics {
     let budgetDriftPct: number | null = null
     let budgetSyncStatus: string | null = null
     let spendPlatform: number | null = null
+    let objectiveFromPlatform: string | null = null
+    let isCatalogFromPlatform: boolean | null = null
 
     // Prepare product pricing options
     const productPrice = (campaign as any).product_price
@@ -121,6 +123,36 @@ export class SyncCampaignMetrics {
           throw new Error(`No data returned from platform API for platform ${platform}`)
         }
 
+        // Primary source for objective should be the direct campaign lookup by ID
+        // returned in getCampaignMetrics(), so we do not depend on paginated lists.
+        if (platformKey === "meta" && platformMetrics?.objective) {
+          objectiveFromPlatform = normalizeMetaObjective(String(platformMetrics.objective))
+        }
+
+        // Best-effort fallback for catalog detection from campaign metadata list.
+        if (platformKey === "meta") {
+          try {
+            const campaigns = await client.listCampaigns(
+              adAccount.platform_account_id,
+              accessToken
+            )
+            const hit = campaigns.find((c) => c.id === (platformCampaignId as string))
+            if (!objectiveFromPlatform && hit?.objective) {
+              objectiveFromPlatform = normalizeMetaObjective(String(hit.objective))
+            }
+            if (hit) {
+              isCatalogFromPlatform = !!(hit.promoted_object?.product_catalog_id)
+            }
+          } catch (metaObjectiveErr) {
+            console.warn(
+              `[SyncCampaignMetrics] Could not refresh Meta objective for campaign ${platformCampaignId}:`,
+              metaObjectiveErr instanceof Error
+                ? metaObjectiveErr.message
+                : String(metaObjectiveErr)
+            )
+          }
+        }
+
         // Best-effort: also pull current budget snapshot from the platform so we
         // can detect drift vs. the local budget. Failures are non-fatal.
         try {
@@ -129,7 +161,7 @@ export class SyncCampaignMetrics {
             accessToken,
             { platformAccountId: adAccount.platform_account_id }
           )
-          const localDaily = Number((campaign as any).budget_local_daily ?? (campaign as any).budget_usd)
+          const localDaily = Number((campaign as any).budget_local_daily ?? (campaign as any).budget_amount)
           const platformDaily = budgetSnapshot.daily_budget
           let driftPct: number | null = null
           let syncStatus: "in_sync" | "drifted" | "unknown" = "unknown"
@@ -222,7 +254,7 @@ export class SyncCampaignMetrics {
         }
 
         // Keep existing metrics if sync fails
-        const statsField = (campaign as any).mock_stats || (campaign as any).platform_stats
+        const statsField = (campaign as any).cached_metrics
         if (statsField && typeof statsField === 'object' && !Array.isArray(statsField)) {
           const platformMetrics = (statsField as Record<string, any>)[platform]
           if (platformMetrics) {
@@ -258,10 +290,9 @@ export class SyncCampaignMetrics {
 
     // 6. Update campaign with calculated metrics, RAW data, status, and budget
     const updated = await this.campaignsRepo.update(userId, campaignId, {
-      mock_stats: updatedMetrics, // Keep name for backward compatibility
-      raw_data_platform: rawDataByPlatform, // New field name
-      raw_data_plai: rawDataByPlatform, // Keep old name for backward compatibility
-      spend_usd: totalSpend,
+      cached_metrics: updatedMetrics,
+      raw_data_platform: rawDataByPlatform,
+      spend_amount: totalSpend,
       last_synced_at: now,
       sync_status: "synced",
       // Status from platform (null for TikTok/unsupported — field left unchanged)
@@ -274,8 +305,18 @@ export class SyncCampaignMetrics {
         budget_sync_status: budgetSyncStatus,
         spend_platform: spendPlatform,
       } : {}),
+      ...(objectiveFromPlatform ? { objective: objectiveFromPlatform } : {}),
+      ...(isCatalogFromPlatform !== null ? { is_catalog: isCatalogFromPlatform } : {}),
     } as any)
 
     return updated
   }
+}
+
+function normalizeMetaObjective(objective: string): string {
+  const normalized = objective.trim().toUpperCase()
+  if (normalized === "TRAFFIC") return "OUTCOME_TRAFFIC"
+  if (normalized === "LEADS") return "OUTCOME_LEADS"
+  if (normalized === "SALES" || normalized === "CONVERSIONS") return "OUTCOME_SALES"
+  return normalized
 }

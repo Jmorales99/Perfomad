@@ -28,10 +28,11 @@ function makeCampaign(overrides: any = {}): any {
     name: "Test Campaign",
     platforms: ["meta"],
     status: "active",
-    spend_usd: 100,
+    spend_amount: 100,
     start_date: new Date(Date.now() - 10 * 86400000).toISOString(),
     objective: "OUTCOME_TRAFFIC",
-    budget_usd: 50,
+    budget_amount: 50,
+    currency: "USD",
     budget_local_daily: 50,
     ...overrides,
   }
@@ -94,7 +95,7 @@ describe("BuildOptimizationInput", () => {
   it("returns insufficient_data when spend < min_spend", async () => {
     mockMetricsHistoryRepo.getHistory.mockResolvedValue([makeHistoryRow({ spend: 5, impressions: 100, clicks: 2 })])
     const result = await useCase.execute({
-      campaign: makeCampaign({ spend_usd: 5 }),
+      campaign: makeCampaign({ spend_amount: 5 }),
       platformSupport: "automatic",
       config: makeConfig({ min_spend_before_action: 50 }),
     })

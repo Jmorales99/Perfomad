@@ -22,10 +22,10 @@ export class GetDashboardMetrics {
     const completedCampaigns = userCampaigns.filter((c) => c.status === "completed").length
 
     // 3. Calculate total spend and budget
-    const totalSpend = userCampaigns.reduce((sum, c) => sum + (c.spend_usd || 0), 0)
-    const totalBudget = userCampaigns.reduce((sum, c) => sum + (c.budget_usd || 0), 0)
+    const totalSpend = userCampaigns.reduce((sum, c) => sum + ((c as any).spend_amount || 0), 0)
+    const totalBudget = userCampaigns.reduce((sum, c) => sum + ((c as any).budget_amount || 0), 0)
 
-    // 4. Aggregate metrics from mock_stats
+    // 4. Aggregate metrics from cached_metrics
     let totalImpressions = 0
     let totalClicks = 0
     let totalConversions = 0
@@ -33,8 +33,8 @@ export class GetDashboardMetrics {
     let totalSales = 0
 
     userCampaigns.forEach((campaign) => {
-      if (campaign.mock_stats) {
-        const stats = campaign.mock_stats as any
+      if (campaign.cached_metrics) {
+        const stats = campaign.cached_metrics as any
         
         // Check if it's multi-platform format: { meta: {...}, google_ads: {...} }
         const platforms = ['meta', 'google_ads', 'linkedin', 'tiktok']
@@ -103,8 +103,9 @@ export class GetDashboardMetrics {
         name: c.name,
         status: c.status,
         platforms: c.platforms,
-        spend_usd: c.spend_usd,
-        budget_usd: c.budget_usd,
+        spend_amount: (c as any).spend_amount,
+        budget_amount: (c as any).budget_amount,
+        currency: (c as any).currency,
         created_at: c.created_at,
       }))
 

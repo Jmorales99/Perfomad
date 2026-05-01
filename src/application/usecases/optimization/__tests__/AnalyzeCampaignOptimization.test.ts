@@ -40,10 +40,11 @@ function makeCampaign(overrides: any = {}) {
     name: "Test Campaign",
     platforms: ["meta"],
     status: "active",
-    spend_usd: 100,
+    spend_amount: 100,
     start_date: new Date(Date.now() - 10 * 86400000).toISOString(),
     objective: "OUTCOME_TRAFFIC",
-    budget_usd: 50,
+    budget_amount: 50,
+    currency: "USD",
     ...overrides,
   }
 }

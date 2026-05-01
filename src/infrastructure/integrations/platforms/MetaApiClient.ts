@@ -10,6 +10,7 @@ import type {
   DailyInsightsRow,
   PlatformApiClient,
   PlatformClientConfig,
+  ProductInsightsRow,
 } from "./PlatformApiClient"
 
 /**
@@ -392,7 +393,7 @@ export class MetaApiClient implements PlatformApiClient {
           access_token: accessToken,
           // effective_status reflects review + billing + hierarchy state;
           // downstream code prefers it over the raw user-configured `status`.
-          fields: "id,name,status,effective_status,objective,start_time,stop_time",
+          fields: "id,name,status,effective_status,objective,start_time,stop_time,promoted_object",
           limit: String(limit),
         },
       })
@@ -403,6 +404,7 @@ export class MetaApiClient implements PlatformApiClient {
         status: campaign.status,
         effective_status: campaign.effective_status,
         objective: campaign.objective,
+        promoted_object: campaign.promoted_object ?? null,
         raw: campaign,
       }))
     } catch (error: any) {
@@ -1483,6 +1485,71 @@ export class MetaApiClient implements PlatformApiClient {
         return "removed"
       default:
         return "unknown"
+    }
+  }
+
+  async getProductInsights(
+    adAccountId: string,
+    accessToken: string,
+    options?: { campaignId?: string; since?: string; until?: string }
+  ): Promise<ProductInsightsRow[]> {
+    const params: Record<string, string> = {
+      level: "product_item",
+      fields: "impressions,clicks,spend,actions,action_values,product_id,product_name",
+      access_token: accessToken,
+    }
+
+    if (options?.since && options?.until) {
+      params.time_range = JSON.stringify({ since: options.since, until: options.until })
+    } else {
+      params.date_preset = "last_30d"
+    }
+
+    if (options?.campaignId) {
+      params.filtering = JSON.stringify([
+        { field: "campaign.id", operator: "IN", value: [options.campaignId] },
+      ])
+    }
+
+    try {
+      const res = await this.client.get(`/act_${adAccountId}/insights`, { params })
+      const rows: unknown[] = res.data?.data ?? []
+
+      const purchaseTypes = new Set(["purchase", "offsite_conversion.fb_pixel_purchase"])
+
+      return rows.map((row: any) => {
+        const actions: Array<{ action_type: string; value: string }> = row.actions ?? []
+        const actionValues: Array<{ action_type: string; value: string }> =
+          row.action_values ?? []
+        const impressions = Number(row.impressions || 0)
+        const clicks = Number(row.clicks || 0)
+        const spend = Number(row.spend || 0)
+        const conversions = actions
+          .filter((a) => purchaseTypes.has(a.action_type))
+          .reduce((s, a) => s + Number(a.value || 0), 0)
+        const revenue = actionValues
+          .filter((a) => purchaseTypes.has(a.action_type))
+          .reduce((s, a) => s + Number(a.value || 0), 0)
+
+        return {
+          product_id: String(row.product_id ?? ""),
+          product_title: row.product_name ?? null,
+          impressions,
+          clicks,
+          spend,
+          conversions,
+          revenue,
+          ctr: impressions > 0 ? clicks / impressions : 0,
+          cpc: clicks > 0 ? spend / clicks : 0,
+          roas: spend > 0 ? revenue / spend : 0,
+          raw: row,
+        } satisfies ProductInsightsRow
+      }).filter((r) => r.product_id !== "")
+    } catch (err: any) {
+      // Catalog not connected or level=product_item not supported for this account
+      const code = err?.response?.data?.error?.code
+      if (code === 100 || code === 102 || code === 200) return []
+      throw err
     }
   }
 }

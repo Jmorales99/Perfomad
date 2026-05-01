@@ -19,13 +19,14 @@ function makeCampaign(overrides: Record<string, any> = {}) {
     client_id: "client-1",
     name: "Test Campaign",
     platforms: ["meta"],
-    budget_usd: 1000,
-    spend_usd: 100,
+    budget_amount: 1000,
+    spend_amount: 100,
+    currency: "USD",
     status: "active",
     start_date: "2024-01-01T00:00:00Z",
     end_date: null,
     created_at: "2024-01-01T00:00:00Z",
-    mock_stats: { spend: 100, impressions: 5000, clicks: 100, ctr: 0.02, conversions: 10, revenue: 500, total_sales: 500 },
+    cached_metrics: { spend: 100, impressions: 5000, clicks: 100, ctr: 0.02, conversions: 10, revenue: 500, total_sales: 500 },
     ...overrides,
   }
 }
@@ -54,19 +55,19 @@ describe("platform-summary aggregation (controller logic extracted)", () => {
     expect(summaries.find((s) => s.platform === "tiktok")?.count).toBe(0)
   })
 
-  it("aggregates flat mock_stats for a platform", () => {
+  it("aggregates flat cached_metrics for a platform", () => {
     const campaigns = [
       makeCampaign({
         id: "1",
         platforms: ["meta"],
-        spend_usd: 100,
-        mock_stats: { spend: 100, impressions: 5000, clicks: 100, ctr: 0.02, conversions: 10, revenue: 500 },
+        spend_amount: 100,
+        cached_metrics: { spend: 100, impressions: 5000, clicks: 100, ctr: 0.02, conversions: 10, revenue: 500 },
       }),
       makeCampaign({
         id: "2",
         platforms: ["meta"],
-        spend_usd: 50,
-        mock_stats: { spend: 50, impressions: 2000, clicks: 40, ctr: 0.02, conversions: 4, revenue: 200 },
+        spend_amount: 50,
+        cached_metrics: { spend: 50, impressions: 2000, clicks: 40, ctr: 0.02, conversions: 4, revenue: 200 },
       }),
     ]
 
@@ -79,9 +80,9 @@ describe("platform-summary aggregation (controller logic extracted)", () => {
     campaigns
       .filter((c) => c.platforms.includes(platform))
       .forEach((campaign) => {
-        totalSpend += campaign.spend_usd || 0
-        if (campaign.mock_stats) {
-          const stats = campaign.mock_stats as any
+        totalSpend += campaign.spend_amount || 0
+        if (campaign.cached_metrics) {
+          const stats = campaign.cached_metrics as any
           if (!(platform in stats)) {
             totalImpressions += stats.impressions || 0
             totalClicks += stats.clicks || 0
@@ -96,18 +97,18 @@ describe("platform-summary aggregation (controller logic extracted)", () => {
     expect(totalRevenue).toBe(700)
   })
 
-  it("extracts per-platform metrics when mock_stats has platform keys", () => {
+  it("extracts per-platform metrics when cached_metrics has platform keys", () => {
     const campaign = makeCampaign({
       id: "1",
       platforms: ["meta", "google_ads"],
-      spend_usd: 150,
-      mock_stats: {
+      spend_amount: 150,
+      cached_metrics: {
         meta: { spend: 100, impressions: 8000, clicks: 160, conversions: 10, revenue: 500 },
         google_ads: { spend: 50, impressions: 4000, clicks: 80, conversions: 5, revenue: 200 },
       },
     })
 
-    const stats = campaign.mock_stats as any
+    const stats = campaign.cached_metrics as any
     const metaStats = stats["meta"]
     const googleStats = stats["google_ads"]
 

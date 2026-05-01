@@ -101,6 +101,7 @@ export class ImportPlatformCampaign {
     let name = `Campaña importada ${input.platformCampaignId}`
     let status: Campaign["status"] = "active"
     let objective: string | null = null
+    let is_catalog = false
     let dailyBudget: number | null = null
     let lifetimeBudget: number | null = null
     let platformStartDate: string | null = null
@@ -125,7 +126,13 @@ export class ImportPlatformCampaign {
 
       const hit = list.find((c) => c.id === input.platformCampaignId)
       if (hit?.name) name = hit.name
-      if (hit?.objective) objective = hit.objective
+      if (hit?.objective) objective = normalizeMetaObjective(hit.objective)
+      is_catalog = !!(hit?.promoted_object?.product_catalog_id)
+      if (!hit?.objective) {
+        console.warn(
+          `[ImportPlatformCampaign] Meta campaign ${input.platformCampaignId} returned without objective. Prompt selection will fall back to generic until objective is synced.`
+        )
+      }
 
       if (budget) {
         // Use budget.name as fallback when listCampaigns() missed the entry (pagination)
@@ -168,8 +175,10 @@ export class ImportPlatformCampaign {
       platformCampaignId: input.platformCampaignId,
       name,
       objective,
+      is_catalog,
       status,
-      budget_usd: dailyBudget,
+      budget_amount: dailyBudget,
+      currency: adAccount.currency ?? "USD",
       lifetime_budget: lifetimeBudget,
       start_date: platformStartDate,
     })
@@ -204,8 +213,8 @@ export class ImportPlatformCampaign {
       const roa = totalSpend > 0 && totalRevenue > 0 ? totalRevenue / totalSpend : undefined
 
       const updated = await this.campaignsRepo.update(input.userId, created.id, {
-        spend_usd: totalSpend,
-        mock_stats: { spend: totalSpend, impressions: totalImpressions, clicks: totalClicks, ctr, cpc, cpm, conversions: totalConversions, revenue: totalRevenue, reach: totalReach, cpa, roa },
+        spend_amount: totalSpend,
+        cached_metrics: { spend: totalSpend, impressions: totalImpressions, clicks: totalClicks, ctr, cpc, cpm, conversions: totalConversions, revenue: totalRevenue, reach: totalReach, cpa, roa },
         last_synced_at: new Date().toISOString(),
         sync_status: "synced",
       } as any)
@@ -271,4 +280,12 @@ export class ImportPlatformCampaign {
 
     return { rowCount: snapshots.length, totalSpend, totalImpressions, totalClicks, totalConversions, totalRevenue, totalReach }
   }
+}
+
+function normalizeMetaObjective(objective: string): string {
+  const normalized = objective.trim().toUpperCase()
+  if (normalized === "TRAFFIC") return "OUTCOME_TRAFFIC"
+  if (normalized === "LEADS") return "OUTCOME_LEADS"
+  if (normalized === "SALES" || normalized === "CONVERSIONS") return "OUTCOME_SALES"
+  return normalized
 }

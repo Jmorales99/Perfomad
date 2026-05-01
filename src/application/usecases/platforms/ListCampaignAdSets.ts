@@ -2,9 +2,12 @@ import type { SupabaseCampaignsRepository } from "@/infrastructure/repositories/
 import type { SupabaseAdAccountsRepository } from "@/infrastructure/repositories/SupabaseAdAccountsRepository"
 import { TokenManager } from "@/infrastructure/integrations/TokenManager"
 import { PlatformApiClientFactory } from "@/infrastructure/integrations/platforms/PlatformApiClientFactory"
+import { MerchantCenterApiClient } from "@/infrastructure/integrations/platforms/MerchantCenterApiClient"
+import type { MerchantProduct } from "@/infrastructure/integrations/platforms/MerchantCenterApiClient"
 import { AuditLogger } from "@/infrastructure/security/AuditLogger"
 import type { AdDetail, AdSetSummary } from "@/infrastructure/integrations/platforms/PlatformApiClient"
 import type { Platform } from "@/domain/repositories/AdAccountsRepository"
+import { env } from "@/config/env"
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -121,7 +124,7 @@ export class ListAdSetAds {
     )
     if (!resolved) return { platform: options?.platform ?? "meta", ads: [] }
 
-    const { platform, platformCampaignId, adAccount } = resolved
+    const { platform, platformCampaignId, adAccount, clientId } = resolved
     const client = PlatformApiClientFactory.createClient(platform)
     const accessToken = await this.tokenManager.getValidAccessToken(
       adAccount as any,
@@ -133,25 +136,67 @@ export class ListAdSetAds {
         platformAccountId: (adAccount as any).platform_account_id,
         campaignId: platformCampaignId ?? undefined,
       })
-      await this.auditLogger.logPlatformApiCall(
-        platform,
-        "listAdSetAds",
-        true,
-        userId,
-        adAccount.id
-      )
+
+      // Shopping campaigns return a single placeholder with merchant_id set.
+      // Enrich it with real product images from Merchant Center when connected.
+      const shoppingPlaceholder = platform === "google_ads"
+        ? ads.find((ad) => ad.creative?.merchant_id != null)
+        : undefined
+
+      if (shoppingPlaceholder) {
+        let enriched: AdDetail[] | null = null
+        try {
+          enriched = await this.enrichShoppingWithProducts(
+            userId,
+            clientId,
+            shoppingPlaceholder.creative.merchant_id!
+          )
+        } catch (enrichErr: any) {
+          // MC enrichment failed — fall through to return placeholder as-is
+        }
+        if (enriched !== null) {
+          await this.auditLogger.logPlatformApiCall(platform, "listAdSetAds", true, userId, adAccount.id)
+          return { platform, ads: enriched }
+        }
+        // MC not connected or enrichment failed — return placeholder as-is
+      }
+
+      await this.auditLogger.logPlatformApiCall(platform, "listAdSetAds", true, userId, adAccount.id)
       return { platform, ads }
     } catch (err) {
-      await this.auditLogger.logPlatformApiCall(
-        platform,
-        "listAdSetAds",
-        false,
-        userId,
-        adAccount.id,
-        err
-      )
+      await this.auditLogger.logPlatformApiCall(platform, "listAdSetAds", false, userId, adAccount.id, err)
       throw err
     }
+  }
+
+  private async enrichShoppingWithProducts(
+    userId: string,
+    clientId: string,
+    merchantId: string
+  ): Promise<AdDetail[] | null> {
+    const mcAccount = await this.adAccountsRepo.findByUserClientAndPlatform(
+      userId,
+      clientId,
+      "google_merchant_center"
+    )
+    if (!mcAccount) return null
+
+    const mcClient = new MerchantCenterApiClient({
+      clientId: env.GOOGLE_ADS_CLIENT_ID || "",
+      clientSecret: env.GOOGLE_ADS_CLIENT_SECRET || "",
+      redirectUri: env.GOOGLE_MC_REDIRECT_URI || "",
+    })
+
+    const mcToken = await this.tokenManager.getValidAccessToken(
+      mcAccount as any,
+      async (refresh) => mcClient.refreshAccessToken(refresh)
+    )
+
+    const effectiveMerchantId = (mcAccount as any).platform_account_id || merchantId
+    const products = await mcClient.listProducts(effectiveMerchantId, mcToken, { maxResults: 50 })
+    if (products.length === 0) return null
+
+    return products.map(mcProductToAdDetail)
   }
 }
 
@@ -159,6 +204,7 @@ interface ResolvedCampaignContext {
   platform: Platform
   platformCampaignId: string
   adAccount: { id: string; platform_account_id?: string }
+  clientId: string
 }
 
 /**
@@ -192,7 +238,12 @@ async function resolveCampaignContext(
     )
     if (!adAccount) return null
 
-    return { platform: primaryPlatform, platformCampaignId, adAccount: adAccount as any }
+    return {
+      platform: primaryPlatform,
+      platformCampaignId,
+      adAccount: adAccount as any,
+      clientId: (campaign as any).client_id,
+    }
   }
 
   // Platform-native id flow
@@ -213,16 +264,35 @@ async function resolveCampaignContext(
     platform: options.platform,
     platformCampaignId: campaignId,
     adAccount: adAccount as any,
+    clientId: options.clientId,
   }
 }
 
 function resolvePlatformCampaignId(campaign: any, platform: string): string | null {
-  const field = campaign.platform_campaign_id || campaign.mock_campaign_id
+  const field = campaign.platform_campaign_id
   if (!field) return null
   try {
     const parsed = typeof field === "string" ? JSON.parse(field) : field
     return parsed?.[platform] ?? null
   } catch {
     return null
+  }
+}
+
+function mcProductToAdDetail(product: MerchantProduct): AdDetail {
+  return {
+    ad_id: product.id,
+    name: product.title,
+    status: "ENABLED",
+    effective_status: "ACTIVE",
+    creative: {
+      creative_id: product.id,
+      type: "image",
+      thumbnail_url: product.imageLink ?? null,
+      image_url: product.imageLink ?? null,
+      video_url: null,
+      cards: [],
+      ad_type: "SHOPPING_PRODUCT_AD",
+    } as any,
   }
 }

@@ -66,7 +66,7 @@ describe("SyncCampaignBudgetFromPlatform", () => {
         platforms: ["meta"],
         platform_campaign_id: { meta: "120000000" },
         budget_local_daily: 100,
-        budget_usd: 100,
+        budget_amount: 100,
         budget_source_of_truth: "local",
       }),
       update: vi.fn().mockResolvedValue(undefined),
@@ -142,7 +142,7 @@ describe("SyncCampaignBudgetFromPlatform", () => {
       expect.objectContaining({
         budget_source_of_truth: "platform",
         budget_local_daily: 80,
-        budget_usd: 80,
+        budget_amount: 80,
       })
     )
   })

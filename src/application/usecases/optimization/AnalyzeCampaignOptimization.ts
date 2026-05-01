@@ -9,8 +9,10 @@ import {
   buildFallbackOutput,
   optimizationOutputSchema,
   type OptimizationOutput,
+  type RecommendationAction,
 } from "./schemas/OptimizationOutput"
 import type { OptimizationInput } from "./schemas/OptimizationInput"
+import { selectPrompt } from "./schemas/systemPrompt"
 
 export type PlatformSupport = "automatic" | "manual_required" | "unsupported"
 
@@ -18,6 +20,7 @@ export interface AnalyzeResult {
   run_id: string
   cached: boolean
   status: "succeeded" | "failed" | "insufficient_data"
+  prompt_version: string | null
   summary: OptimizationOutput["summary"] | null
   alerts: OptimizationOutput["alerts"]
   next_step?: string
@@ -64,6 +67,11 @@ export class AnalyzeCampaignOptimization {
 
     const config = await this.configRepo.get()
     const platformSupport = resolvePlatformSupport(campaign)
+    const selectedPromptVersion = selectPrompt(
+      Array.isArray(campaign.platforms) ? campaign.platforms[0] : campaign.platforms,
+      campaign.objective ?? null,
+      (campaign as any).is_catalog ?? false
+    ).version
 
     const recentRuns = await this.optimizationRepo.countRecentRunsForUser(userId, 1)
     if (recentRuns >= config.analyze_rate_limit_per_hour) {
@@ -83,7 +91,7 @@ export class AnalyzeCampaignOptimization {
         campaign_id: campaign.id,
         user_id: userId,
         input_hash: "insufficient_data",
-        prompt_version: config.prompt_version,
+        prompt_version: selectedPromptVersion,
         model: config.llm_model,
         status: "insufficient_data",
         raw_input: null,
@@ -97,6 +105,7 @@ export class AnalyzeCampaignOptimization {
         run_id: run.id,
         cached: false,
         status: "insufficient_data",
+        prompt_version: selectedPromptVersion,
         summary: run.summary as OptimizationOutput["summary"] | null,
         alerts: [],
         recommendations: [],
@@ -118,6 +127,7 @@ export class AnalyzeCampaignOptimization {
         run_id: cached.id,
         cached: true,
         status: "succeeded",
+        prompt_version: cached.prompt_version ?? null,
         summary: cached.summary as OptimizationOutput["summary"] | null,
         alerts: (cached.summary as any)?.alerts ?? [],
         next_step: (cached.summary as any)?.next_step,
@@ -142,7 +152,7 @@ export class AnalyzeCampaignOptimization {
         campaign_id: campaign.id,
         user_id: userId,
         input_hash: inputHash,
-        prompt_version: config.prompt_version,
+        prompt_version: selectedPromptVersion,
         model: config.llm_model,
         status: "failed",
         raw_input: input,
@@ -152,6 +162,7 @@ export class AnalyzeCampaignOptimization {
         run_id: run.id,
         cached: false,
         status: "failed",
+        prompt_version: selectedPromptVersion,
         summary: null,
         alerts: [],
         recommendations: [],
@@ -165,6 +176,8 @@ export class AnalyzeCampaignOptimization {
       llmResult = await this.claudeClient.analyzeCampaign(input, {
         model: config.llm_model,
         maxTokens: config.llm_max_tokens,
+        platform: input.campaign.platform,
+        objective: input.campaign.objective ?? null,
       })
     } catch (err: any) {
       if (err instanceof ClaudeNotConfiguredError) {
@@ -174,7 +187,7 @@ export class AnalyzeCampaignOptimization {
         campaign_id: campaign.id,
         user_id: userId,
         input_hash: inputHash,
-        prompt_version: config.prompt_version,
+        prompt_version: selectedPromptVersion,
         model: config.llm_model,
         status: "failed",
         raw_input: input,
@@ -184,6 +197,7 @@ export class AnalyzeCampaignOptimization {
         run_id: run.id,
         cached: false,
         status: "failed",
+        prompt_version: selectedPromptVersion,
         summary: null,
         alerts: [],
         recommendations: [],
@@ -202,7 +216,7 @@ export class AnalyzeCampaignOptimization {
       campaign_id: campaign.id,
       user_id: userId,
       input_hash: inputHash,
-      prompt_version: config.prompt_version,
+      prompt_version: llmResult.promptVersion,
       model: llmResult.model || config.llm_model,
       status: runStatus,
       raw_input: input,
@@ -243,6 +257,7 @@ export class AnalyzeCampaignOptimization {
         confidence: r.confidence ?? null,
         applicable_to_platform: r.action_type !== "informational",
         platform_support: platformSupportForAction(r.action_type, platformSupport),
+        prompt_version: llmResult.promptVersion,
       }))
     )
 
@@ -250,6 +265,7 @@ export class AnalyzeCampaignOptimization {
       run_id: run.id,
       cached: false,
       status: runStatus,
+      prompt_version: llmResult.promptVersion ?? null,
       summary: validated.summary,
       alerts: validated.alerts ?? [],
       next_step: validated.next_step,
@@ -299,7 +315,7 @@ function sanitizeRecommendations(
   const sanitized: OptimizationOutput["recommendations"] = []
   const seenIds = new Set<string>()
 
-  for (const r of recs.slice(0, 6)) {
+  for (const r of recs.slice(0, 5)) {
     const id = seenIds.has(r.id) ? `${r.id}_${sanitized.length}` : r.id
     seenIds.add(id)
 
@@ -362,6 +378,6 @@ const DB_SAFE_ACTION_TYPES = new Set([
   "flag_creative",
 ])
 
-function toDbActionType(actionType: string): string {
-  return DB_SAFE_ACTION_TYPES.has(actionType) ? actionType : "flag_for_review"
+function toDbActionType(actionType: string): RecommendationAction {
+  return (DB_SAFE_ACTION_TYPES.has(actionType) ? actionType : "flag_for_review") as RecommendationAction
 }

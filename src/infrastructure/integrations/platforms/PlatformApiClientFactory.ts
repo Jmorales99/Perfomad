@@ -36,6 +36,8 @@ export class PlatformApiClientFactory {
           redirectUri: env.GOOGLE_ADS_REDIRECT_URI || "",
           developerToken: env.GOOGLE_ADS_DEVELOPER_TOKEN || "",
           apiVersion: env.GOOGLE_ADS_API_VERSION,
+          loginCustomerId: env.GOOGLE_ADS_LOGIN_CUSTOMER_ID || "",
+          debug: env.GOOGLE_ADS_DEBUG === "true",
         }
 
         if (!config.clientId || !config.clientSecret) {

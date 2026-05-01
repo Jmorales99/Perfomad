@@ -5,12 +5,16 @@ import { supabaseAdmin } from "@/infrastructure/db/supabaseClient"
 import { SupabaseCampaignsRepository } from "@/infrastructure/repositories/SupabaseCampaignsRepository"
 import { SupabaseAdAccountsRepository } from "@/infrastructure/repositories/SupabaseAdAccountsRepository"
 import { CampaignMetricsHistoryRepository } from "@/infrastructure/repositories/CampaignMetricsHistoryRepository"
-import { CreateCampaign } from "@/application/usecases/campaigns/CreateCampaign"
+import { CreateCampaign, CreativeBrandMismatchError } from "@/application/usecases/campaigns/CreateCampaign"
+import { SupabaseMediaRepository } from "@/infrastructure/repositories/SupabaseMediaRepository"
 import { SyncCampaignMetrics } from "@/application/usecases/campaigns/SyncCampaignMetrics"
 import { GetCampaignInsights } from "@/application/usecases/campaigns/GetCampaignInsights"
 import { GetDashboardMetrics } from "@/application/usecases/campaigns/GetDashboardMetrics"
 import { EnrichCampaignsWithMetrics } from "@/application/usecases/campaigns/EnrichCampaignsWithMetrics"
 import { SyncCampaignBudgetFromPlatform } from "@/application/usecases/campaigns/SyncCampaignBudgetFromPlatform"
+import { SyncProductMetrics } from "@/application/usecases/campaigns/SyncProductMetrics"
+import { GetProductMetrics } from "@/application/usecases/campaigns/GetProductMetrics"
+import { SupabaseProductMetricsRepository } from "@/infrastructure/repositories/SupabaseProductMetricsRepository"
 import {
   ListCampaignAdSets,
   ListAdSetAds,
@@ -30,7 +34,8 @@ import { createCampaignSchema } from "@/application/schemas/CreateCampaignSchema
 export async function CampaignsController(app: FastifyInstance) {
   const campaignsRepo = new SupabaseCampaignsRepository()
   const adAccountsRepo = new SupabaseAdAccountsRepository()
-  const createCampaign = new CreateCampaign(campaignsRepo, adAccountsRepo)
+  const mediaRepo = new SupabaseMediaRepository()
+  const createCampaign = new CreateCampaign(campaignsRepo, adAccountsRepo, mediaRepo)
   const metricsHistoryRepo = new CampaignMetricsHistoryRepository()
   const syncCampaignMetrics = new SyncCampaignMetrics(campaignsRepo, metricsHistoryRepo)
   const getCampaignInsights = new GetCampaignInsights(campaignsRepo, metricsHistoryRepo)
@@ -72,6 +77,9 @@ export async function CampaignsController(app: FastifyInstance) {
   )
   const listCampaignAdSets = new ListCampaignAdSets(campaignsRepo, adAccountsRepo)
   const listAdSetAds = new ListAdSetAds(campaignsRepo, adAccountsRepo)
+  const productMetricsRepo = new SupabaseProductMetricsRepository()
+  const syncProductMetrics = new SyncProductMetrics(campaignsRepo, productMetricsRepo)
+  const getProductMetrics = new GetProductMetrics(campaignsRepo, productMetricsRepo)
 
   // 📦 Listar campañas (solo lectura, no requiere suscripción)
   // Enriquecidas automáticamente con métricas
@@ -245,7 +253,7 @@ export async function CampaignsController(app: FastifyInstance) {
         platforms: body.platforms as Platform[],
         description: body.description,
 
-        budgetUsd: body.budget_usd,
+        budgetAmount: body.budget_amount,
         lifetimeBudget: body.lifetime_budget,
         platformBudgets: body.platform_budgets as any,
 
@@ -318,6 +326,12 @@ export async function CampaignsController(app: FastifyInstance) {
 
       return reply.code(201).send(campaign)
     } catch (err: any) {
+      if (err instanceof CreativeBrandMismatchError) {
+        return reply.code(422).send({
+          error: 'CREATIVE_BRAND_MISMATCH',
+          message: err.message,
+        })
+      }
       req.log.error(err)
       return reply.code(500).send({
         error: err.message || "Error al crear campaña",
@@ -395,8 +409,8 @@ export async function CampaignsController(app: FastifyInstance) {
 
       // If campaign has metrics stored locally, return them
       // Handle both per-platform and flat structures
-      if (campaign.mock_stats) {
-        let metrics = campaign.mock_stats
+      if (campaign.cached_metrics) {
+        let metrics = campaign.cached_metrics
         
         // Check if it's per-platform structure (e.g., {"meta": {...}})
         if (typeof metrics === 'object' && !Array.isArray(metrics)) {
@@ -411,7 +425,7 @@ export async function CampaignsController(app: FastifyInstance) {
             
             // If platform metrics are already calculated, use them directly
             // Otherwise, calculate from raw data if available
-            const rawDataField = (campaign as any).raw_data_platform || (campaign as any).raw_data_plai
+            const rawDataField = (campaign as any).raw_data_platform
             if (rawDataField && typeof rawDataField === 'object') {
               const rawData = rawDataField[firstPlatform] || rawDataField
               metrics = MetricsCalculator.calculateFromRaw(rawData)
@@ -430,10 +444,10 @@ export async function CampaignsController(app: FastifyInstance) {
       }
 
       // Otherwise, try to calculate from stored raw data
-      const campaignIdField = (campaign as any).platform_campaign_id || (campaign as any).mock_campaign_id
+      const campaignIdField = (campaign as any).platform_campaign_id
       if (campaignIdField) {
         try {
-          const rawDataField = (campaign as any).raw_data_platform || (campaign as any).raw_data_plai
+          const rawDataField = (campaign as any).raw_data_platform
           if (rawDataField) {
             // Calculate from stored RAW data
             const { MetricsCalculator } = await import("@/application/services/MetricsCalculator")
@@ -524,7 +538,7 @@ export async function CampaignsController(app: FastifyInstance) {
         name: string
         platforms: ("meta" | "google_ads" | "linkedin" | "tiktok")[]
         description: string
-        budget_usd: number
+        budget_amount: number
         status: "active" | "paused" | "completed"
         start_date: string
         end_date: string | null
@@ -649,10 +663,10 @@ export async function CampaignsController(app: FastifyInstance) {
           let totalSpend = 0
 
           platformCampaigns.forEach((campaign) => {
-            totalSpend += campaign.spend_usd || 0
+            totalSpend += (campaign as any).spend_amount || 0
 
-            if (campaign.mock_stats) {
-              const stats = campaign.mock_stats as any
+            if (campaign.cached_metrics) {
+              const stats = campaign.cached_metrics as any
               if (typeof stats === "object" && !Array.isArray(stats) && platform in stats) {
                 const platformStats = stats[platform]
                 if (platformStats && typeof platformStats === "object") {
@@ -1057,6 +1071,39 @@ export async function CampaignsController(app: FastifyInstance) {
       return reply.code(500).send({
         error: err.message || "Error al obtener anuncios del ad set",
       })
+    }
+  })
+
+  app.post("/campaigns/:id/products/sync", async (req, reply) => {
+    try {
+      const user = await verifyUserAndSubscription(req, reply)
+      if (!user) return
+      const { id } = req.params as { id: string }
+      const { since, until } = req.query as { since?: string; until?: string }
+
+      const results = await syncProductMetrics.execute(user.id, id, { since, until })
+      const total = results.reduce((s, r) => s + r.synced, 0)
+      return reply.send({ synced: total, by_platform: results })
+    } catch (err: any) {
+      req.log.error({ err }, "Error syncing product metrics")
+      if (err.message?.includes("no encontrada")) return reply.code(404).send({ error: err.message })
+      return reply.code(500).send({ error: err.message || "Error al sincronizar métricas de producto" })
+    }
+  })
+
+  app.get("/campaigns/:id/products", async (req, reply) => {
+    try {
+      const user = await verifyUser(req, reply)
+      if (!user) return
+      const { id } = req.params as { id: string }
+      const { since, until } = req.query as { since?: string; until?: string }
+
+      const result = await getProductMetrics.execute(user.id, id, { since, until })
+      return reply.send(result)
+    } catch (err: any) {
+      req.log.error({ err }, "Error getting product metrics")
+      if (err.message?.includes("no encontrada")) return reply.code(404).send({ error: err.message })
+      return reply.code(500).send({ error: err.message || "Error al obtener métricas de producto" })
     }
   })
 }

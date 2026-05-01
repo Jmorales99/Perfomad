@@ -277,7 +277,7 @@ export class CampaignMetricsHistoryRepository {
           insights_data: insight.insights_data,
           recommendations: insight.recommendations || null,
           calculated_at: insight.calculated_at || new Date().toISOString(),
-          data_source: insight.data_source || "plai_api",
+          data_source: insight.data_source || "platform_api",
           is_stale: insight.is_stale || false,
         },
         {

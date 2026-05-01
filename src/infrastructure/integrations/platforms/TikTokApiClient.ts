@@ -10,6 +10,7 @@ import type {
   DailyInsightsRow,
   PlatformApiClient,
   PlatformClientConfig,
+  ProductInsightsRow,
 } from "./PlatformApiClient"
 
 const DEFAULT_API_BASE = "https://business-api.tiktok.com"
@@ -383,5 +384,71 @@ export class TikTokApiClient implements PlatformApiClient {
     throw new Error(
       "TikTok ad-level status updates are not implemented. Apply this change manually in TikTok Ads Manager."
     )
+  }
+
+  async getProductInsights(
+    adAccountId: string,
+    accessToken: string,
+    options?: { campaignId?: string; since?: string; until?: string }
+  ): Promise<ProductInsightsRow[]> {
+    const today = new Date().toISOString().slice(0, 10)
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+    const since = options?.since ?? thirtyDaysAgo
+    const until = options?.until ?? today
+
+    try {
+      const body: Record<string, unknown> = {
+        advertiser_id: adAccountId,
+        report_type: "BASIC",
+        data_level: "AUCTION_PRODUCT",
+        dimensions: ["product_id"],
+        metrics: ["spend", "impressions", "clicks", "purchase", "total_purchase_value"],
+        start_date: since,
+        end_date: until,
+        page_size: 100,
+      }
+
+      if (options?.campaignId) {
+        body.filters = [{ field_name: "campaign_id", filter_type: "IN", filter_value: `["${options.campaignId}"]` }]
+      }
+
+      type ReportEnvelope = { code: number; message?: string; data?: { list?: unknown[] } }
+      const res = await this.postWithRetry<ReportEnvelope>(
+        "/open_api/v1.3/report/integrated/get/",
+        body,
+        { "Access-Token": accessToken }
+      )
+
+      const rows: unknown[] = res?.data?.list ?? []
+      if (rows.length === 0) return []
+
+      return rows
+        .map((row: any): ProductInsightsRow | null => {
+          const productId = row.dimensions?.product_id ?? ""
+          if (!productId) return null
+          const impressions = Number(row.metrics?.impressions ?? 0)
+          const clicks = Number(row.metrics?.clicks ?? 0)
+          const spend = Number(row.metrics?.spend ?? 0)
+          const conversions = Number(row.metrics?.purchase ?? 0)
+          const revenue = Number(row.metrics?.total_purchase_value ?? 0)
+          return {
+            product_id: String(productId),
+            product_title: null,
+            image_url: null,
+            impressions,
+            clicks,
+            spend,
+            conversions,
+            revenue,
+            ctr: impressions > 0 ? clicks / impressions : 0,
+            cpc: clicks > 0 ? spend / clicks : 0,
+            roas: spend > 0 ? revenue / spend : 0,
+          }
+        })
+        .filter((r): r is ProductInsightsRow => r !== null)
+    } catch {
+      // DPA/catalog not configured for this account — return empty without error
+      return []
+    }
   }
 }

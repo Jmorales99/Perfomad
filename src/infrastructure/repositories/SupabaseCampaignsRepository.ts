@@ -1,4 +1,5 @@
 import { supabaseClient, supabaseAdmin } from "@/infrastructure/db/supabaseClient"
+import type { Platform } from "@/domain/repositories/AdAccountsRepository"
 
 export interface CampaignImage {
   id: string
@@ -10,26 +11,26 @@ export interface Campaign {
   id: string
   user_id: string
   client_id?: string | null
-  platforms: ("meta" | "google_ads" | "linkedin" | "tiktok")[]
+  platforms: Platform[]
   name: string
   description?: string
-  budget_usd: number
+  budget_amount: number
   lifetime_budget?: number // Alternative to daily budget
   platform_budgets?: Record<string, { budget_type: "daily" | "lifetime"; amount: number }> | null
-  spend_usd: number
+  spend_amount: number
+  currency: string
   status: "active" | "paused" | "completed"
   start_date: string
   end_date: string | null
   created_at: string
   number?: number
   images?: CampaignImage[]
-  mock_campaign_id?: string
   last_synced_at?: string
   sync_status?: "pending" | "syncing" | "synced" | "error"
-  raw_data_plai?: any // Raw API response from Plai (or any source)
   
   // Meta/Facebook Ads specific fields
   objective?: string // OUTCOME_TRAFFIC, OUTCOME_SALES, OUTCOME_ENGAGEMENT, etc.
+  is_catalog?: boolean // true when objective=OUTCOME_SALES and promoted_object.product_catalog_id is set
   billing_event?: string // IMPRESSIONS, LINK_CLICKS, etc.
   bid_strategy?: string // LOWEST_COST_WITHOUT_CAP, COST_CAP, etc.
   special_ad_categories?: string[] // ['HOUSING', 'EMPLOYMENT', 'CREDIT']
@@ -52,7 +53,7 @@ export interface Campaign {
     }
   }
   
-  mock_stats?: {
+  cached_metrics?: {
     spend: number
     impressions: number
     clicks: number
@@ -100,7 +101,7 @@ export class SupabaseCampaignsRepository {
       const signed = await Promise.all(
         imgs.map(async (img) => {
           const { data: signedUrl } = await supabaseAdmin.storage
-            .from("campaign-images")
+            .from("performad-creatives")
             .createSignedUrl(img.file_path, 60 * 60)
           return {
             id: img.id,
@@ -147,7 +148,7 @@ export class SupabaseCampaignsRepository {
       const signed = await Promise.all(
         imgs.map(async (img) => {
           const { data: signedUrl } = await supabaseAdmin.storage
-            .from("campaign-images")
+            .from("performad-creatives")
             .createSignedUrl(img.file_path, 60 * 60)
           return {
             id: img.id,
@@ -163,7 +164,7 @@ export class SupabaseCampaignsRepository {
     return campaigns
   }
 
-  // ✅ Crear campaña (ahora permite mock_campaign_id y mock_stats)
+  // ✅ Crear campaña
   async create(
     campaign: Omit<Campaign, "id" | "created_at" | "images"> & {
       images?: { path: string }[]
@@ -188,10 +189,11 @@ export class SupabaseCampaignsRepository {
         name: campaign.name,
         platforms: campaign.platforms,
         description: campaign.description || "",
-        budget_usd: campaign.budget_usd ?? 0,
+        budget_amount: campaign.budget_amount ?? 0,
         lifetime_budget: campaign.lifetime_budget ?? null,
         platform_budgets: campaign.platform_budgets ?? null,
-        spend_usd: 0,
+        spend_amount: 0,
+        currency: campaign.currency ?? "USD",
         status: campaign.status ?? "active",
         start_date: campaign.start_date ?? new Date().toISOString(),
         end_date: campaign.end_date ?? null,
@@ -203,9 +205,7 @@ export class SupabaseCampaignsRepository {
         special_ad_categories: campaign.special_ad_categories ?? null,
         // Platform-specific settings
         platform_settings: campaign.platform_settings ?? null,
-        // Plai integration
-        mock_campaign_id: campaign.mock_campaign_id ?? null,
-        mock_stats: campaign.mock_stats ?? null,
+        cached_metrics: campaign.cached_metrics ?? null,
       })
       .select()
       .maybeSingle()
@@ -229,7 +229,7 @@ export class SupabaseCampaignsRepository {
     return created
   }
 
-  // ✅ Actualizar campaña (permite mock_campaign_id y mock_stats)
+  // ✅ Actualizar campaña
   async update(
     userId: string,
     id: string,
@@ -322,15 +322,17 @@ export class SupabaseCampaignsRepository {
   async createImported(params: {
     userId: string
     clientId: string | null
-    platform: "meta" | "google_ads" | "linkedin" | "tiktok"
+    platform: Platform
     platformCampaignId: string
     name: string
     objective?: string | null
     status?: Campaign["status"]
-    budget_usd?: number | null
+    budget_amount?: number | null
+    currency?: string | null
     lifetime_budget?: number | null
     /** Actual campaign start date fetched from the platform (ISO 8601). Falls back to now if omitted. */
     start_date?: string | null
+    is_catalog?: boolean
   }): Promise<Campaign> {
     const { data: lastCampaign, error: fetchError } = await supabaseAdmin
       .from("campaigns")
@@ -353,14 +355,16 @@ export class SupabaseCampaignsRepository {
         platform_campaign_id: { [params.platform]: params.platformCampaignId },
         source: "imported",
         description: "",
-        budget_usd: params.budget_usd ?? 0,
+        budget_amount: params.budget_amount ?? 0,
         lifetime_budget: params.lifetime_budget ?? null,
-        spend_usd: 0,
+        spend_amount: 0,
+        currency: params.currency ?? "USD",
         status: params.status ?? "active",
         start_date: params.start_date ?? new Date().toISOString(),
         end_date: null,
         number: nextNumber,
         objective: params.objective ?? null,
+        is_catalog: params.is_catalog ?? false,
         sync_status: "pending",
       } as any)
       .select()

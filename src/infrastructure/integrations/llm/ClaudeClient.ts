@@ -1,8 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk"
 import { env } from "@/config/env"
 import {
-  SYSTEM_PROMPT_V2,
-  SYSTEM_PROMPT_VERSION,
+  selectPrompt,
 } from "@/application/usecases/optimization/schemas/systemPrompt"
 import type { OptimizationInput } from "@/application/usecases/optimization/schemas/OptimizationInput"
 
@@ -52,14 +51,25 @@ export class ClaudeClient {
 
   async analyzeCampaign(
     input: OptimizationInput,
-    options: { model: string; maxTokens: number }
+    options: {
+      model: string
+      maxTokens: number
+      platform?: string | null
+      objective?: string | null
+    }
   ): Promise<ClaudeAnalyzeResult> {
     const client = this.getClient()
     const startedAt = Date.now()
 
+    const { text: systemPromptText, version: promptVersion } = selectPrompt(
+      options.platform,
+      options.objective,
+      input.campaign.is_catalog
+    )
+
     const userPayload = JSON.stringify({
       optimization_input: input,
-      respond_with: "OptimizationOutput v2 as strict JSON only",
+      respond_with: "OptimizationOutput as strict JSON only",
     })
 
     const response = await client.messages.create(
@@ -69,7 +79,7 @@ export class ClaudeClient {
         system: [
           {
             type: "text",
-            text: SYSTEM_PROMPT_V2,
+            text: systemPromptText,
             cache_control: { type: "ephemeral" },
           },
         ],
@@ -104,7 +114,7 @@ export class ClaudeClient {
       inputTokens: response.usage?.input_tokens ?? null,
       outputTokens: response.usage?.output_tokens ?? null,
       latencyMs,
-      promptVersion: SYSTEM_PROMPT_VERSION,
+      promptVersion,
     }
   }
 }

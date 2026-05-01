@@ -259,7 +259,7 @@ export class ApplyOptimizationRecommendation {
         })
         responsePayload = { new_budget: newBudget, ...context }
         await this.campaignsRepo.update(userId, campaignId, {
-          budget_usd: newBudget,
+          budget_amount: newBudget,
           budget_local_daily: newBudget,
         } as any)
       } else if (recommendation.action_type === "pause_ad") {
@@ -351,7 +351,7 @@ export class ApplyOptimizationRecommendation {
 }
 
 function resolvePlatformCampaignId(campaign: any, platform: string): string | null {
-  const field = campaign.platform_campaign_id || campaign.mock_campaign_id
+  const field = campaign.platform_campaign_id
   if (!field) return null
   try {
     const parsed = typeof field === "string" ? JSON.parse(field) : field
@@ -370,7 +370,7 @@ function computeNewBudget(
   const currentDaily =
     Number(campaign.budget_platform_daily) ||
     Number(campaign.budget_local_daily) ||
-    Number(campaign.budget_usd) ||
+    Number((campaign as any).budget_amount) ||
     null
 
   const explicitNewBudget =

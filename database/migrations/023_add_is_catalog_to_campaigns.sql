@@ -1,0 +1,2 @@
+ALTER TABLE public.campaigns
+  ADD COLUMN IF NOT EXISTS is_catalog BOOLEAN NOT NULL DEFAULT false;

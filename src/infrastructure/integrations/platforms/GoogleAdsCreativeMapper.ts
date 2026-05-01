@@ -106,6 +106,33 @@ export function buildAdCreativeFromRowData(
     }
   }
 
+  // ── VIDEO_RESPONSIVE_AD: first video asset wins; companion banner as fallback ─
+  if (type === "VIDEO_RESPONSIVE_AD") {
+    const vra = pick(adData, "videoResponsiveAd", "video_responsive_ad") as Record<string, unknown> | undefined
+    if (vra) {
+      const videoRefs = ((vra.videos ?? []) as any[])
+        .map((v: any) => (typeof v === "string" ? v : (v?.asset as string | undefined)))
+        .filter((r): r is string => typeof r === "string")
+      const youtubeId = videoRefs.map((ref) => assetMap.get(ref)?.youtubeId).find(Boolean)
+      if (youtubeId) {
+        return {
+          type: "video",
+          image_url: null,
+          thumbnail_url: `https://img.youtube.com/vi/${youtubeId}/hqdefault.jpg`,
+          video_url: `https://www.youtube.com/watch?v=${youtubeId}`,
+          cards: [],
+        }
+      }
+      const bannerRefs = ((vra.companionBanners ?? vra.companion_banners ?? []) as any[])
+        .map((b: any) => (typeof b === "string" ? b : (b?.asset as string | undefined)))
+        .filter((r): r is string => typeof r === "string")
+      const bannerUrl = bannerRefs.map((ref) => assetMap.get(ref)?.imageUrl).find(Boolean)
+      if (bannerUrl) {
+        return { type: "image", image_url: bannerUrl, thumbnail_url: bannerUrl, video_url: null, cards: [] }
+      }
+    }
+  }
+
   // ── VIDEO_AD: YouTube ID via asset resolution ────────────────────────────────
   if (type === "VIDEO_AD") {
     const va = pick(adData, "videoAd", "video_ad") as Record<string, unknown> | undefined
@@ -156,6 +183,13 @@ export function collectAssetResourceNames(
   // VIDEO_AD: video.asset
   const va = (adData as any).videoAd ?? (adData as any).video_ad
   if (va?.video) addRef(va.video)
+
+  // VIDEO_RESPONSIVE_AD: videos[] and companion_banners[]
+  const vra = (adData as any).videoResponsiveAd ?? (adData as any).video_responsive_ad
+  if (vra) {
+    for (const v of (vra.videos ?? [])) addRef(v)
+    for (const b of (vra.companionBanners ?? vra.companion_banners ?? [])) addRef(b)
+  }
 
   // RESPONSIVE_DISPLAY_AD: marketing_images and square_marketing_images
   const rda = (adData as any).responsiveDisplayAd ?? (adData as any).responsive_display_ad

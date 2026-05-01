@@ -12,7 +12,18 @@
       "Read(//c/Users/56976/Desktop//**)",
       "Read(//c/Users/56976/**)",
       "Bash(xargs ls *)",
-      "Bash(echo \"EXIT:$?\")"
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(npx --prefix \"C:/Users/56976/Desktop/Perfomad_front\" tsc --noEmit --project \"C:/Users/56976/Desktop/Perfomad_front/tsconfig.app.json\")",
+      "Read(//c/c/Users/56976/Desktop/Perfomad_front/**)",
+      "Bash(grep -E \"\\\\.ts$\")",
+      "WebFetch(domain:developers.google.com)",
+      "WebSearch",
+      "PowerShell(& npx tsc --noEmit --project \"c:\\\\Users\\\\56976\\\\Desktop\\\\Perfomad_front\\\\tsconfig.app.json\" 2>&1)",
+      "PowerShell(& npx tsc --noEmit --project \"c:\\\\Users\\\\56976\\\\Desktop\\\\Perfomad_front\\\\tsconfig.app.json\" 2>&1 | Where-Object { $_ -match \"AdCreativeCard|InlineAdSets|SettingsPage|optimizationRepository|merchantCenter\" })",
+      "WebFetch(domain:merchantapi.googleapis.com)",
+      "WebFetch(domain:almcorp.com)",
+      "Bash(grep -E \"\\\\.\\(ts|js\\)$\")",
+      "Bash(grep -E \"\\\\.\\(sql|ts|js\\)$\")"
     ],
     "additionalDirectories": [
       "c:\\Users\\56976\\Desktop\\Perfomad_front\\src"

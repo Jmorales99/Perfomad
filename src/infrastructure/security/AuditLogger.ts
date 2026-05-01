@@ -2,7 +2,7 @@ import { isAxiosError } from "axios"
 import { supabaseAdmin } from "@/infrastructure/db/supabaseClient"
 import { CryptoService } from "./CryptoService"
 
-export type Platform = "meta" | "google_ads" | "linkedin" | "tiktok" | "youtube"
+export type Platform = "meta" | "google_ads" | "linkedin" | "tiktok" | "youtube" | "google_merchant_center"
 
 export type AuditEventType =
   | "token_refresh"

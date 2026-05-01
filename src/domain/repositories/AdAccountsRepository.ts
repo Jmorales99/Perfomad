@@ -2,7 +2,7 @@
  * Domain interface for ad accounts (platform connections).
  * All ad-related data is scoped by user_id + client_id.
  */
-export type Platform = "meta" | "google_ads" | "linkedin" | "tiktok"
+export type Platform = "meta" | "google_ads" | "linkedin" | "tiktok" | "google_merchant_center"
 
 export interface AdAccount {
   id: string

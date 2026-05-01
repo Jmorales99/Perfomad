@@ -7,7 +7,7 @@ import { z } from "zod"
  * validates the ones that matter for platform API calls:
  *   - budget is coerced to number (handles "1.234,56" already parsed by frontend
  *     NumberInput to a number, and rejects NaN)
- *   - exactly one of budget_usd / lifetime_budget
+ *   - exactly one of budget_amount / lifetime_budget
  *   - date coherence
  *   - Meta enums (objective / billing_event)
  */
@@ -92,7 +92,7 @@ export const createCampaignSchema = z
     description: z.string().max(500).optional(),
 
     // Budget — null-safe: null is treated as absent (frontend may send null for empty fields)
-    budget_usd: z.preprocess(
+    budget_amount: z.preprocess(
       (v) => (v == null ? undefined : Number(v)),
       z.number().positive()
     ).optional(),
@@ -101,7 +101,7 @@ export const createCampaignSchema = z
       z.number().positive()
     ).optional(),
 
-    // Per-platform budget overrides (take precedence over global budget_usd/lifetime_budget)
+    // Per-platform budget overrides (take precedence over global budget_amount/lifetime_budget)
     platform_budgets: z.record(
       z.enum(VALID_PLATFORMS),
       z.object({
@@ -151,12 +151,12 @@ export const createCampaignSchema = z
       const hasPlatformBudgets =
         d.platform_budgets && Object.keys(d.platform_budgets).length > 0
       if (hasPlatformBudgets) return true
-      return (d.budget_usd != null) !== (d.lifetime_budget != null)
+      return (d.budget_amount != null) !== (d.lifetime_budget != null)
     },
     {
       message:
-        "Debes indicar exactamente un presupuesto: diario (budget_usd) o total (lifetime_budget), o configurar presupuestos por plataforma (platform_budgets)",
-      path: ["budget_usd"],
+        "Debes indicar exactamente un presupuesto: diario (budget_amount) o total (lifetime_budget), o configurar presupuestos por plataforma (platform_budgets)",
+      path: ["budget_amount"],
     }
   )
   .refine(

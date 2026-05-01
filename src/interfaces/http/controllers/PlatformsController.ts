@@ -510,10 +510,10 @@ export async function PlatformsController(app: FastifyInstance) {
           let totalSpend = 0
 
           platformCampaigns.forEach((campaign) => {
-            totalSpend += campaign.spend_usd || 0
+            totalSpend += (campaign as any).spend_amount || 0
 
-            if (campaign.mock_stats) {
-              const stats = campaign.mock_stats as any
+            if (campaign.cached_metrics) {
+              const stats = campaign.cached_metrics as any
               if (typeof stats === "object" && !Array.isArray(stats) && platform in stats) {
                 const platformStats = stats[platform]
                 if (platformStats && typeof platformStats === "object") {
